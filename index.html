@@ -1,0 +1,1749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>THERMOSYNC — Adaptive Datacenter Coolant Controller</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Martian+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════
+   THERMOSYNC — laboratory instrument panel.
+   An instrument, not a HUD: machined surfaces, hairline rules,
+   one water blue. Warm graphite — never blue-black — and no glow.
+
+   Dark is the default and is SELECTED, not flipped: its accents are
+   independently chosen against the dark surface and validated there.
+   They are DARKER than the light-mode accents, not brighter, which is
+   the opposite of what inverting a light palette produces.
+     dark  (surface #1A1813): #2E93CC #C87C1E #D24B30 — all checks pass
+     light (surface #F4F1EA): #0F79B8 #CC6A00 #BE2E0E — all checks pass
+   Both: lightness band, chroma floor, CVD separation, contrast.
+   ═══════════════════════════════════════════════════════════ */
+:root{
+  --paper:#100F0B;
+  --plate:#1A1813;
+  --plate-2:#221F18;
+  --well:#0C0B08;
+  --ink:#EDE7D7;
+  --ink-2:#C4BDA9;
+  --ink-3:#8E8877;
+  --ink-4:#5E594B;
+  --rule:#332F26;
+  --rule-2:#2A271F;
+
+  --water:#2E93CC;       /* flow series + nominal status */
+  --warn:#C87C1E;        /* warning status */
+  --crit:#D24B30;        /* critical status */
+
+  --grid:rgba(237,231,215,.030);
+  --grid-soft:rgba(237,231,215,.022);
+  --sheen:rgba(237,231,215,.035);
+  --noise:.045;
+}
+:root[data-theme="light"]{
+  --paper:#E6E2D8;
+  --plate:#F4F1EA;
+  --plate-2:#EDE9E0;
+  --well:#FBFAF6;
+  --ink:#17160F;
+  --ink-2:#4A473C;
+  --ink-3:#7C7869;
+  --ink-4:#A8A395;
+  --rule:#C9C3B4;
+  --rule-2:#DAD5C8;
+
+  --water:#0F79B8;
+  --warn:#CC6A00;
+  --crit:#BE2E0E;
+
+  --grid:rgba(23,22,15,.028);
+  --grid-soft:rgba(23,22,15,.018);
+  --sheen:rgba(255,255,255,.7);
+  --noise:.055;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--paper);
+  /* engineering grid, printed faint */
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size:9px 9px;
+  color:var(--ink);
+  font-family:'Martian Mono',monospace;
+  font-weight:400;
+  min-height:100vh;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+/* paper tooth */
+body::after{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:98;opacity:var(--noise);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.shell{max-width:1480px;margin:0 auto;padding:26px 26px 54px;position:relative;z-index:2}
+
+/* ── HEADER ─────────────────────────────────── */
+header{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
+  padding-bottom:12px;margin-bottom:6px;
+  animation:rise .55s cubic-bezier(.2,.7,.3,1) both;
+}
+/* engineering double rule */
+.rule2{height:3px;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);
+  opacity:.85;margin-bottom:20px;animation:rise .55s cubic-bezier(.2,.7,.3,1) .04s both}
+.brand{display:flex;align-items:flex-end;gap:13px}
+.mark{width:34px;height:34px;border:1px solid var(--ink);position:relative;flex:none;margin-bottom:3px}
+.mark::before{content:'';position:absolute;inset:5px;border:1px solid var(--ink);opacity:.35}
+.mark::after{content:'';position:absolute;left:50%;top:50%;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;
+  background:var(--water);animation:beat 2.6s ease-in-out infinite}
+@keyframes beat{0%,100%{opacity:1}50%{opacity:.25}}
+h1{
+  font-family:'Instrument Serif',Georgia,serif;font-weight:400;
+  font-size:38px;letter-spacing:.03em;line-height:.9;color:var(--ink);
+}
+.tagline{font-size:8px;font-weight:400;color:var(--ink-3);letter-spacing:.22em;
+  text-transform:uppercase;margin-top:7px}
+.hdr-right{display:flex;gap:0;align-items:stretch;border:1px solid var(--rule);background:var(--plate)}
+.stamp{padding:7px 14px;border-right:1px solid var(--rule-2);text-align:right}
+.stamp:last-child{border-right:0}
+.stamp .k{font-size:7px;letter-spacing:.18em;color:var(--ink-4);text-transform:uppercase;margin-bottom:4px}
+.stamp .v{font-size:13px;font-weight:500;color:var(--ink);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+
+/* ── LAYOUT ─────────────────────────────────── */
+.grid{display:grid;grid-template-columns:320px 1fr 300px;gap:16px;align-items:start}
+@media(max-width:1240px){.grid{grid-template-columns:1fr}}
+
+.panel{
+  background:var(--plate);border:1px solid var(--rule);border-radius:2px;position:relative;
+  box-shadow:0 1px 0 var(--sheen) inset, 0 1px 2px rgba(23,22,15,.05);
+  animation:rise .55s cubic-bezier(.2,.7,.3,1) both;
+}
+.panel:nth-child(1){animation-delay:.08s}
+.panel:nth-child(2){animation-delay:.14s}
+.panel:nth-child(3){animation-delay:.2s}
+@keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+
+.p-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  padding:9px 13px;background:var(--plate-2);border-bottom:1px solid var(--rule);
+}
+.p-title{font-family:'Instrument Serif',Georgia,serif;font-size:17px;letter-spacing:.02em;color:var(--ink)}
+.p-id{font-size:7px;color:var(--ink-4);letter-spacing:.18em;text-transform:uppercase}
+.p-body{padding:15px 13px}
+
+/* ── CONTROLS ───────────────────────────────── */
+label.fld{display:block;font-size:7.5px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:7px}
+.tempwrap{position:relative;margin-bottom:12px;border:1px solid var(--ink);background:var(--well)}
+input[type=number]{
+  width:100%;background:transparent;border:0;color:var(--ink);
+  font-family:'Martian Mono',monospace;font-weight:500;font-size:34px;letter-spacing:-.04em;
+  padding:11px 50px 11px 12px;outline:none;-moz-appearance:textfield;
+  font-variant-numeric:tabular-nums;
+}
+input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+.tempwrap:focus-within{outline:2px solid var(--water);outline-offset:1px}
+.unit{position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  font-family:'Instrument Serif',serif;font-size:20px;color:var(--ink-3);pointer-events:none}
+
+.btn{
+  width:100%;border:1px solid var(--ink);border-radius:1px;background:transparent;
+  color:var(--ink);font-family:'Martian Mono',monospace;font-weight:500;font-size:9px;
+  letter-spacing:.13em;text-transform:uppercase;padding:11px 8px;cursor:pointer;
+  transition:background .12s,color .12s;
+}
+.btn:hover{background:var(--ink);color:var(--plate)}
+.btn:active{transform:translateY(1px)}
+.btn:focus-visible{outline:2px solid var(--water);outline-offset:2px}
+.btn.primary{background:var(--ink);color:var(--plate)}
+.btn.primary:hover{background:var(--water);border-color:var(--water);color:var(--plate)}
+.btn.ghost{border-color:var(--rule);color:var(--ink-3);margin-top:8px}
+.btn.ghost:hover{background:var(--ink-3);color:var(--plate);border-color:var(--ink-3)}
+/* Severity rides a colored edge, not the label. Filling these with the accent
+   and writing on it in white lands at ~3.9:1 — under the 4.5:1 text floor.
+   A border is a graphical mark (3:1) and stays legible in both themes. */
+.btn.warn{border-left:3px solid var(--warn)}
+.btn.crit{border-left:3px solid var(--crit)}
+.btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+
+/* theme toggle */
+.tgl{display:grid;place-items:center;padding:0 12px;background:transparent;border:0;
+  border-left:1px solid var(--rule-2);color:var(--ink-3);cursor:pointer;transition:color .15s}
+.tgl:hover{color:var(--ink)}
+.tgl:focus-visible{outline:2px solid var(--water);outline-offset:-2px}
+.tgl svg{display:block;width:15px;height:15px}
+
+.divider{display:flex;align-items:center;gap:8px;margin:17px 0 14px}
+.divider span{font-size:7px;letter-spacing:.2em;color:var(--ink-4);text-transform:uppercase;white-space:nowrap}
+.divider::after{content:'';flex:1;height:1px;background:var(--rule)}
+
+/* physical fader */
+.slider-row{margin-bottom:14px}
+.slider-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+.slider-top .k{font-size:7.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3)}
+.slider-top .v{font-size:11px;font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;-webkit-appearance:none;background:transparent;height:18px;cursor:pointer;display:block}
+input[type=range]::-webkit-slider-runnable-track{
+  height:9px;
+  background:
+    linear-gradient(var(--ink),var(--ink)) 0 4px/100% 1px no-repeat,
+    repeating-linear-gradient(90deg, var(--ink-4) 0 1px, transparent 1px 10%);
+  opacity:.75;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:9px;height:18px;margin-top:-4.5px;border-radius:1px;
+  background:var(--ink);border:0;box-shadow:0 0 0 2px var(--plate);
+  transition:background .12s;
+}
+input[type=range]:hover::-webkit-slider-thumb{background:var(--water)}
+input[type=range]:focus-visible{outline:2px solid var(--water);outline-offset:2px}
+
+/* ── STATUS ─────────────────────────────────── */
+.status{display:flex;align-items:center;gap:9px;padding:9px 11px;
+  border:1px solid var(--ink);background:var(--well);margin-bottom:13px}
+.chip{width:9px;height:9px;flex:none;background:var(--ink-4)}
+.status.idle .chip{background:var(--water)}
+.status.cooling .chip{background:var(--water);animation:beat 1.1s ease-in-out infinite}
+.status.critical .chip{background:var(--crit);animation:beat .5s ease-in-out infinite}
+.status .txt{font-size:9px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--ink)}
+.status .rt{margin-left:auto;font-size:8px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+/* ── TILES ──────────────────────────────────── */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--rule);
+  border:1px solid var(--rule)}
+.tile{background:var(--plate);padding:9px 10px}
+.tile .k{font-size:7px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3);margin-bottom:6px}
+.tile .v{font-size:19px;font-weight:500;letter-spacing:-.04em;line-height:1;color:var(--ink);
+  font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:4px}
+.tile .u{font-size:8px;color:var(--ink-3);font-weight:400;letter-spacing:0}
+/* the colored mark carries identity — the number stays ink */
+.tile .sq{width:7px;height:7px;flex:none;align-self:center;margin-right:1px}
+.tile.wide{grid-column:1/-1}
+.tile .bar{height:3px;background:var(--rule-2);margin-top:8px;overflow:hidden}
+.tile .bar i{display:block;height:100%;background:var(--ink);transition:width .25s,background .25s}
+
+/* ── SAVINGS ────────────────────────────────── */
+.savings{padding:12px;border:1px solid var(--ink);margin-top:12px;background:var(--well)}
+.savings .k{font-size:7px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3);margin-bottom:7px}
+.savings .v{font-family:'Instrument Serif',serif;font-size:30px;line-height:1;color:var(--ink);
+  font-variant-numeric:tabular-nums}
+.savings .sub{font-size:8px;color:var(--ink-3);margin-top:8px;line-height:1.65;letter-spacing:.01em}
+
+/* ── STAGE ──────────────────────────────────── */
+.stage{display:grid;grid-template-columns:236px 1fr;min-height:432px}
+@media(max-width:700px){.stage{grid-template-columns:1fr}}
+.rack-col{border-right:1px solid var(--rule);padding:14px 12px;display:flex;
+  flex-direction:column;align-items:center;background:
+    repeating-linear-gradient(90deg, var(--grid-soft) 0 1px, transparent 1px 9px)}
+.chart-col{padding:12px 14px}
+svg{display:block;max-width:100%}
+
+/* ── LOG ────────────────────────────────────── */
+.log{height:146px;overflow-y:auto;font-size:8px;line-height:1.85;padding:9px 12px;
+  background:var(--well);border-top:1px solid var(--rule);letter-spacing:.01em}
+.log::-webkit-scrollbar{width:9px}
+.log::-webkit-scrollbar-track{background:var(--plate-2)}
+.log::-webkit-scrollbar-thumb{background:var(--ink-4);border:3px solid var(--plate-2)}
+.log div{color:var(--ink-2);animation:logIn .22s ease both;white-space:nowrap}
+.log .t{color:var(--ink-4);margin-right:8px}
+.log .c{color:var(--water)}
+.log .a{color:var(--warn)}
+.log .r{color:var(--crit);font-weight:500}
+.log .g{color:var(--ink-2)}
+@keyframes logIn{from{opacity:0}to{opacity:1}}
+
+/* inlet slider reads out the ASHRAE liquid-cooling class it sits in */
+.ashrae{font-size:7px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-4);
+  margin-top:4px}
+
+/* ── PLANT (CCHP) ───────────────────────────
+   The plant spans the full width beneath the rack: it is facility-scale kit,
+   and standing it next to the rack column would imply it lives in the rack. */
+.plant{grid-column:1/-1;margin-top:0}
+.panel:nth-child(4){animation-delay:.26s}
+.plant-stage{display:grid;grid-template-columns:1fr 302px}
+@media(max-width:1060px){.plant-stage{grid-template-columns:1fr}}
+.flow-col{padding:13px 13px 8px;border-right:1px solid var(--rule);
+  background:repeating-linear-gradient(90deg, var(--grid-soft) 0 1px, transparent 1px 9px)}
+/* The diagram scales with the column instead of letterboxing inside a fixed box */
+.flow-col svg{width:100%;height:auto}
+@media(max-width:1060px){.flow-col{border-right:0;border-bottom:1px solid var(--rule)}}
+.plant-side{padding:15px 13px}
+
+/* Two-state plant switch. The LED is corroboration, never the signal — the
+   label itself reads ONLINE/OFFLINE, so the state survives greyscale and CVD. */
+.btn.tog{display:flex;align-items:center;justify-content:center;gap:8px}
+.btn.tog .led{width:7px;height:7px;flex:none;background:var(--ink-4)}
+.btn.tog[aria-pressed="true"] .led{background:var(--water);animation:beat 2.6s ease-in-out infinite}
+.btn.tog:hover .led{background:var(--plate)}
+
+/* ── INFO SHEET (model basis) ────────────────
+   A spec sheet, not a marketing modal: the same plate finish, hairline rules,
+   and a column of constant → value → provenance. Sources are real links. */
+dialog#sheet{
+  /* the global `*{margin:0}` reset kills the centring a dialog gets by default */
+  margin:auto;
+  width:min(760px, calc(100vw - 32px));max-height:min(82vh, 720px);padding:0;
+  background:var(--plate);color:var(--ink);border:1px solid var(--ink);border-radius:2px;
+  box-shadow:0 1px 0 var(--sheen) inset, 0 18px 50px rgba(0,0,0,.4);
+}
+dialog#sheet::backdrop{background:rgba(8,7,5,.62)}
+:root[data-theme="light"] dialog#sheet::backdrop{background:rgba(23,22,15,.34)}
+.sheet-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  padding:11px 14px;background:var(--plate-2);border-bottom:1px solid var(--rule);
+  position:sticky;top:0;z-index:2}
+.sheet-head .p-title{font-size:19px}
+.sheet-body{padding:14px;overflow-y:auto;max-height:calc(min(82vh,720px) - 46px)}
+.sheet-body::-webkit-scrollbar{width:9px}
+.sheet-body::-webkit-scrollbar-track{background:var(--plate-2)}
+.sheet-body::-webkit-scrollbar-thumb{background:var(--ink-4);border:3px solid var(--plate-2)}
+.sheet-intro{font-size:9px;line-height:1.9;color:var(--ink-2);letter-spacing:.01em;
+  padding-bottom:12px;margin-bottom:4px;border-bottom:1px solid var(--rule-2)}
+.sheet-intro b{color:var(--ink);font-weight:500}
+.srow{display:grid;grid-template-columns:132px 96px 1fr;gap:10px;align-items:baseline;
+  padding:9px 0;border-bottom:1px solid var(--rule-2)}
+@media(max-width:620px){.srow{grid-template-columns:1fr;gap:3px}}
+.srow .sk{font-size:8px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}
+.srow .sv{font-size:11px;font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em}
+.srow .ss{font-size:8.5px;line-height:1.8;color:var(--ink-2);letter-spacing:.01em}
+.srow .ss a{color:var(--water);text-decoration:none;border-bottom:1px solid transparent}
+.srow .ss a:hover{border-bottom-color:var(--water)}
+.srow .ss a:focus-visible{outline:2px solid var(--water);outline-offset:2px}
+/* An estimate is not a citation. Mark it plainly rather than letting it sit in
+   a column of sourced numbers looking equally settled. */
+.est{display:inline-block;font-size:7px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--warn);border:1px solid var(--warn);border-radius:1px;padding:0 3px;
+  margin-right:5px;vertical-align:1px}
+.sheet-sec{font-size:7.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-4);
+  margin:16px 0 2px}
+.sheet-foot{font-size:8px;line-height:1.9;color:var(--ink-4);letter-spacing:.02em;
+  margin-top:14px;padding-top:11px;border-top:1px solid var(--rule)}
+
+kbd{border:1px solid var(--rule);background:var(--plate-2);border-radius:1px;padding:1px 4px;
+  font-size:7px;color:var(--ink-2);font-family:'Martian Mono',monospace}
+.foot{margin-top:18px;padding-top:12px;border-top:1px solid var(--rule);
+  font-size:7.5px;color:var(--ink-4);letter-spacing:.05em;text-align:center;line-height:2}
+.foot b{color:var(--ink-3);font-weight:500}
+
+/* Motion is decorative here — the numbers carry the meaning. Honour the
+   OS setting: the sim keeps running, it just stops moving for its own sake.
+   (JS freezes the marching pipe arrows to match; see REDUCE.) */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none !important;transition:none !important}
+}
+</style>
+</head>
+<body data-palette="#0F79B8,#CC6A00,#BE2E0E">
+<div class="shell">
+
+<header>
+  <div class="brand">
+    <div class="mark"></div>
+    <div>
+      <h1>ThermoSync</h1>
+      <div class="tagline">Adaptive Coolant Regulation · Rack A-07</div>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <div class="stamp"><div class="k">Sim Clock</div><div class="v" id="clock">00:00:00</div></div>
+    <div class="stamp"><div class="k">Cycles</div><div class="v" id="cycles">000</div></div>
+    <div class="stamp"><div class="k">Setpoint</div><div class="v" id="spDisp">32.0°C</div></div>
+    <button class="tgl" id="info" aria-label="Model basis and sources" title="Model basis &amp; sources">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 11v5.5" stroke-linecap="round"/>
+        <circle cx="12" cy="7.6" r=".9" fill="currentColor" stroke="none"/>
+      </svg>
+    </button>
+    <button class="tgl" id="theme" aria-label="Switch to light panel" title="Switch panel finish">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18Z" fill="currentColor" stroke="none"/>
+      </svg>
+    </button>
+  </div>
+</header>
+<div class="rule2"></div>
+
+<div class="grid">
+
+  <!-- LEFT: CONTROL -->
+  <div class="panel">
+    <div class="p-head"><div class="p-title">Thermal Input</div><div class="p-id">TX-01</div></div>
+    <div class="p-body">
+      <label class="fld" for="tempIn">Injected Rack Temperature</label>
+      <div class="tempwrap">
+        <input type="number" id="tempIn" value="38" step="0.5" min="15" max="95">
+        <div class="unit">°C</div>
+      </div>
+      <button class="btn primary" id="send">Send to Controller</button>
+      <div class="btn-row">
+        <button class="btn warn" id="rand">Random</button>
+        <button class="btn crit" id="spike">Spike</button>
+      </div>
+      <button class="btn ghost" id="reset">Reset Simulation</button>
+
+      <div class="divider"><span>Controller Tuning</span></div>
+
+      <div class="slider-row">
+        <div class="slider-top"><span class="k">Setpoint</span><span class="v" id="spV">32.0 °C</span></div>
+        <input type="range" id="sp" min="28" max="42" step="0.5" value="32" aria-label="Setpoint">
+      </div>
+      <div class="slider-row">
+        <div class="slider-top"><span class="k">Compute Load</span><span class="v" id="loadV">65 %</span></div>
+        <input type="range" id="load" min="0" max="100" step="1" value="65" aria-label="Compute load">
+      </div>
+      <div class="slider-row">
+        <div class="slider-top"><span class="k">Inlet Water Temp</span><span class="v" id="inletV">22.0 °C</span></div>
+        <input type="range" id="inlet" min="18" max="32" step="0.5" value="22" aria-label="Inlet water temperature">
+        <div class="ashrae" id="ashrae">ASHRAE W27 · chiller-assisted</div>
+      </div>
+      <div class="slider-row">
+        <div class="slider-top"><span class="k">Sim Speed</span><span class="v" id="spdV">4×</span></div>
+        <input type="range" id="spd" min="1" max="20" step="1" value="4" aria-label="Simulation speed">
+      </div>
+
+      <div class="divider"><span>Cogeneration Plant</span></div>
+
+      <button class="btn tog" id="chp" aria-pressed="false">
+        <i class="led"></i><span id="chpLbl">Plant Offline · Grid-Tied</span>
+      </button>
+
+      <div class="slider-row" style="margin:14px 0 0">
+        <div class="slider-top"><span class="k">Grid Carbon</span><span class="v" id="ciV">373 g/kWh</span></div>
+        <input type="range" id="ci" min="0" max="800" step="1" value="373"
+               aria-label="Grid carbon intensity, grams CO2 per kilowatt-hour">
+        <div class="ashrae" id="ciNote">US average · eGRID 2022</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: RACK + CHART -->
+  <div class="panel">
+    <div class="p-head"><div class="p-title">Rack Thermal &amp; Coolant Loop</div><div class="p-id">A-07 · Live</div></div>
+    <div class="stage">
+      <div class="rack-col">
+        <svg id="rackSvg" viewBox="0 0 210 400" width="210" height="400" role="img"
+             aria-label="Piping and instrumentation diagram of rack A-07"></svg>
+      </div>
+      <div class="chart-col">
+        <canvas id="chart" width="900" height="408" style="width:100%;height:408px"
+                role="img" aria-label="Rack temperature and coolant flow over time"></canvas>
+      </div>
+    </div>
+    <div class="log" id="log" role="log" aria-live="polite"></div>
+  </div>
+
+  <!-- RIGHT: TELEMETRY -->
+  <div class="panel">
+    <div class="p-head"><div class="p-title">Telemetry</div><div class="p-id">RX-02</div></div>
+    <div class="p-body">
+      <div class="status idle" id="status">
+        <div class="chip"></div>
+        <div class="txt" id="statusTxt">Idle · Nominal</div>
+        <div class="rt" id="statusRt">—</div>
+      </div>
+
+      <div class="tiles">
+        <div class="tile"><div class="k">Rack Temp</div>
+          <div class="v"><i class="sq" id="sqTemp"></i><span id="tTemp">38.0</span><span class="u">°C</span></div>
+          <div class="bar"><i id="bTemp"></i></div></div>
+        <div class="tile"><div class="k">Flow Rate</div>
+          <div class="v"><i class="sq" style="background:var(--water)"></i><span id="tFlow">0.0</span><span class="u">L/min</span></div>
+          <div class="bar"><i id="bFlow" style="background:var(--water)"></i></div></div>
+        <div class="tile"><div class="k">Valve</div><div class="v"><span id="tValve">0</span><span class="u">%</span></div></div>
+        <div class="tile"><div class="k">Heat Load</div><div class="v"><span id="tHeat">0.0</span><span class="u">kW</span></div></div>
+        <div class="tile"><div class="k">Heat Pulled</div><div class="v"><span id="tCool">0.0</span><span class="u">kW</span></div></div>
+        <div class="tile"><div class="k">ΔT Coolant</div><div class="v"><span id="tDelta">0.0</span><span class="u">°C</span></div></div>
+        <div class="tile wide"><div class="k">Water Used · This Session</div>
+          <div class="v"><span id="tWater">0.00</span><span class="u">L</span></div></div>
+      </div>
+
+      <div class="savings">
+        <div class="k">Water Saved vs. Peak-Sized Constant Loop</div>
+        <div class="v" id="tSaved">0.00 L</div>
+        <div class="sub" id="tSavedPct">Baseline: constant 180 L/min loop, sized for peak load by the 1.5 L/min/kW rule. ThermoSync modulates to actual demand.</div>
+      </div>
+
+      <div class="divider"><span>Command</span></div>
+      <div style="font-size:8px;color:var(--ink-3);line-height:2.1">
+        <kbd>R</kbd> random &nbsp;<kbd>↵</kbd> send &nbsp;<kbd>S</kbd> spike &nbsp;<kbd>G</kbd> plant &nbsp;<kbd>Esc</kbd> reset
+      </div>
+    </div>
+  </div>
+
+  <!-- FULL WIDTH: COGENERATION PLANT -->
+  <div class="panel plant">
+    <div class="p-head">
+      <div class="p-title">Cogeneration Plant — Trigeneration (CCHP)</div>
+      <div class="p-id">CCHP-01 · Fuel → Power → Cooling</div>
+    </div>
+    <div class="plant-stage">
+      <div class="flow-col">
+        <svg id="chpSvg" viewBox="0 0 880 360" width="880" height="360" role="img"
+             aria-label="Energy flow diagram of the cogeneration plant and heat rejection duty"></svg>
+      </div>
+      <div class="plant-side">
+        <div class="status idle" id="chpStat">
+          <div class="chip"></div>
+          <div class="txt" id="chpStatTxt">Grid-Tied · Plant Offline</div>
+          <div class="rt" id="chpStatRt">—</div>
+        </div>
+
+        <button class="btn tog" id="chpBtn" aria-pressed="false" style="margin:10px 0 0">
+          <i class="led"></i><span id="chpBtnLbl">Start Plant</span>
+        </button>
+
+        <div class="tiles">
+          <div class="tile"><div class="k">Fuel Input</div>
+            <div class="v"><span id="pFuel">0.0</span><span class="u">kW</span></div></div>
+          <div class="tile"><div class="k">Electric Out</div>
+            <div class="v"><i class="sq" style="background:var(--water)"></i><span id="pEl">0.0</span><span class="u">kW</span></div></div>
+          <div class="tile"><div class="k">Heat Recovered</div>
+            <div class="v"><i class="sq" style="background:var(--warn)"></i><span id="pHeat">0.0</span><span class="u">kW</span></div></div>
+          <div class="tile"><div class="k">Absorption Cooling</div>
+            <div class="v"><span id="pAbs">0.0</span><span class="u">kW</span></div></div>
+          <div class="tile"><div class="k">Electric Chiller</div>
+            <div class="v"><span id="pEc">0.0</span><span class="u">kW</span></div></div>
+          <div class="tile"><div class="k">Grid Import</div>
+            <div class="v"><span id="pImp">0.0</span><span class="u">kW</span></div></div>
+          <div class="tile"><div class="k">PUE · Session</div>
+            <div class="v"><span id="pPue">1.00</span></div>
+            <div class="bar"><i id="bPue"></i></div></div>
+          <div class="tile"><div class="k">Fuel Efficiency</div>
+            <div class="v"><span id="pEff">—</span><span class="u">%</span></div></div>
+        </div>
+
+        <div class="savings">
+          <div class="k">CO₂ · This Session</div>
+          <div class="v" id="pCo2">0.00 kg</div>
+          <div class="sub" id="pCo2Sub">Plant offline — the rack and its chillers are drawing grid power.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="foot">
+  <b>THERMOSYNC</b> · closed-loop coolant regulation simulation · GB200 NVL72-class rack, 120 kW, 100% direct-to-chip liquid cooled · lumped-capacitance (C ≈ 850 kJ/°C), single-phase water heat exchange<br>
+  Q̇<sub>cool</sub> = ṁ · c<sub>p</sub> · (T<sub>rack</sub> − T<sub>inlet</sub>) · ε &nbsp;|&nbsp; controller: feedforward + proportional valve authority, predictive shutoff, deadband hysteresis<br>
+  <b>CCHP-01</b> · trigeneration · 2×100 kW gas genset (27% elec / 53% thermal / 80% total, HHV — EPA catalog) → single-stage LiBr absorption chiller (COP 0.70 — DOE) → chilled water to the loop &nbsp;|&nbsp; <b>press <kbd>I</kbd> for model basis &amp; sources</b>
+</div>
+
+<dialog id="sheet" aria-labelledby="sheetTitle">
+  <div class="sheet-head">
+    <div class="p-title" id="sheetTitle">Model Basis</div>
+    <button class="btn ghost" id="sheetClose" style="width:auto;margin:0;padding:5px 12px">Close</button>
+  </div>
+  <div class="sheet-body" id="sheetBody"></div>
+</dialog>
+
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   THERMOSYNC — simulation core
+   ═══════════════════════════════════════════════════════════ */
+
+/* Modelled on a GB200 NVL72-class rack: 72 GPUs, ~120 kW, 100% direct-to-chip
+   liquid cooled with no fans in the rack. Every constant below is either a
+   published figure, derived from one, or flagged as an estimate. The info sheet
+   (SOURCES) carries the citations; keep the two in step when editing. */
+const CFG = {
+  // ~1.36 t chassis at metal cp (~500 J/kg°C) plus the ~200 L coolant inventory
+  // at 4186. Only a fraction of that mass is tightly coupled to the temperature
+  // the loop actually chases, so this is a deliberate under-estimate of the sum.
+  C: 850000,         // rack thermal capacitance J/°C — ESTIMATE
+  // A 100%-liquid rack has no fans, so ambient loss is incidental — leakage off
+  // the chassis, not a cooling path. Negligible beside a 120 kW load either way.
+  k_loss: 60,        // passive convective loss to room W/°C — ESTIMATE
+  T_room: 22,        // room ambient °C — ASHRAE A1 recommended envelope 18–27
+  P_idle: 20000,     // idle rack power W — ESTIMATE, ~17% of peak
+  P_max: 100000,     // additional power at 100% load W → 120 kW peak (NVIDIA)
+  cp: 4186,          // water specific heat J/kg°C at ~20°C
+  eff: 0.85,         // heat exchanger effectiveness — ESTIMATE
+  flow_min: 15,      // L/min minimum open-valve flow (CDU turndown) — ESTIMATE
+  // 1.5 L/min/kW is the industry sizing rule; at 120 kW that is 180 L/min and
+  // lands the coolant ΔT at ~10°C, which is B200's inlet-to-outlet budget.
+  // 210 gives the CDU ~17% headroom, inside the quoted 1.5–2 L/min/kW band.
+  flow_max: 210,     // L/min max pump flow — 1.75 L/min/kW
+  // Gain sets the proportional band. Too high and the valve saturates on every
+  // cycle — the controller degenerates into bang-bang on/off. At ~10% of pump
+  // range per °C it genuinely modulates in normal operation and only pins open
+  // for real spikes, for the same water use.
+  Kp: 22,            // proportional gain (L/min per °C error)
+  target_off: 0.5,   // aim this far below setpoint so the loop converges
+  deadband: 1.6,     // °C above setpoint before engaging
+  // Baseline = a constant-flow loop provisioned for PEAK load, which is how
+  // fixed cooling is actually sized: the 1.5 L/min/kW rule applied to 120 kW.
+  // It is a fair comparison, not an identical one — held at 180 L/min the rack
+  // settles ~33°C at peak, about a degree above the default setpoint. The point
+  // is that it pays that flow every second regardless of load; ThermoSync doesn't.
+  baseline_flow: 180, // L/min always-on comparison — 1.5 L/min/kW × 120 kW
+  crit: 45,          // °C critical threshold — return-side limit
+};
+
+/* Trigeneration plant (CCHP): a gas genset makes the rack's electricity, its
+   recovered jacket/exhaust heat drives a single-stage absorption chiller, and
+   the chilled water it makes is what the coolant loop rejects into.
+
+   The engine is EPA's own representative 100 kW system, which is the honest size
+   for one 120 kW rack — and small engines are INEFFICIENT. 27% electrical is not
+   a pessimistic choice; it is what the catalog says a machine this size does. The
+   number matters: it is what decides the carbon verdict below. */
+const CHP = {
+  // EPA Catalog of CHP Technologies, Table 2-2, System 1 (100 kW, Tecogen
+  // Inverde Ultra 100): 27.0% electrical + 53.0% thermal = 80.0% total, HHV.
+  // Note 80%, not the "over 85%" that CHP marketing quotes — see SOURCES.
+  eta_el: 0.270,     // electrical efficiency, HHV
+  eta_th: 0.530,     // recovered heat / fuel input, HHV
+  // DOE fact sheet Table 2, System 1: single-stage, hot-water-fired (190°F in),
+  // 50 tons, COP 0.70. Single-stage is exactly what pairs with a recip engine —
+  // the engine recovers heat as hot water, which is all a single stage needs.
+  cop_abs: 0.70,
+  cop_elec: 5.5,     // water-cooled centrifugal chiller — ESTIMATE
+  cop_rej: 25,       // dry-cooler / tower fans + condenser pumps — ESTIMATE
+  gen_cap: 200000,   // W installed — 2 × 100 kW, N+1 — ESTIMATE
+  pump_max: 3000,    // W CDU pump at full flow — ESTIMATE (affinity law, P ∝ Q³)
+  // Economiser band. Anchored to the ASHRAE classes the inlet slider already
+  // reads out: W17 needs full mechanical chilling, W32 is chiller-free, and W27
+  // sits a third of the way in — which is precisely "chiller-assisted".
+  free_lo: 17,       // °C inlet at/below which the chiller carries the whole duty
+  free_hi: 32,       // °C inlet at/above which dry coolers alone suffice
+  co2_gas: 0.181,    // kg CO₂ per kWh fuel HHV — EPA 53.06 kg/MMBtu ÷ 293.07
+};
+
+/* ── PROVENANCE ──────────────────────────────
+   What the info sheet renders. Every CFG constant appears here exactly once,
+   either with a source or marked est:true — an unsourced number should look
+   unsourced. Values are read from CFG so the sheet can't drift from the model. */
+const lnk = (t,u) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`;
+
+const SOURCES = [
+  {sec:'Rack — NVIDIA GB200 NVL72 class'},
+  {k:'Peak power', v:((CFG.P_idle+CFG.P_max)/1000).toFixed(0)+' kW',
+   s:`Rack power consumption is approximately 120 kW across 72 Blackwell GPUs and 36 Grace CPUs,
+      100% direct-to-chip liquid cooled with no fans in the rack.
+      ${lnk('NVIDIA DGX GB200 user guide','https://docs.nvidia.com/dgx/dgxgb200-user-guide/hardware.html')} ·
+      ${lnk('NVIDIA GB200 NVL72','https://www.nvidia.com/en-us/data-center/gb200-nvl72/')}`},
+  {k:'Idle power', v:(CFG.P_idle/1000).toFixed(0)+' kW', est:true,
+   s:`Not published. Taken as ~17% of peak — GPUs at idle still draw substantially, and the
+      Grace CPUs, NVLink switches and power shelves never stop.`},
+  {k:'Thermal capacitance', v:(CFG.C/1000).toFixed(0)+' kJ/°C', est:true,
+   s:`Derived, not published: ~1.36 t (3,000 lb) chassis mass at metal c<sub>p</sub> ≈ 500 J/kg°C,
+      plus a ~200 L coolant inventory at 4,186 J/kg°C. Only part of that mass tracks the
+      temperature the loop chases, so the figure is deliberately below the naive sum.`},
+  {k:'Context', v:'—',
+   s:`For scale: the average data centre rack is ~12 kW (AFCOM 2024), and traditional racks run
+      5–10 kW. Liquid cooling exists because of densities like this one.
+      ${lnk('Rack density survey','https://blog.enconnex.com/data-center-rack-density')}`},
+
+  {sec:'Coolant loop'},
+  {k:'Inlet water', v:'18–32 °C',
+   s:`ASHRAE liquid-cooling classes are W17/W27/W32/W40/W45/W+, where the number is the
+      <b>maximum</b> supply temperature in °C and all classes share a 2°C floor. W17/W27 imply
+      chillers; W32 and above can run chiller-free. NVIDIA specifies a 20–25°C inlet for GB200.
+      ${lnk('ASHRAE TC9.9 liquid cooling','https://www.vertiv.com/49db1c/globalassets/documents/white-papers/ashrae_tc0909_emergence_and_expansion_of_liquid_cooling_in_mainstream_data_centers_5_may_2021_332771_0.pdf')} ·
+      ${lnk('5th ed. guideline changes','https://www.upsite.com/blog/major-changes-to-ashraes-fifth-edition-of-thermal-guidelines-part-3-liquid-cooling-chapter-updates/')} ·
+      ${lnk('DCD: hot water / cold water','https://www.datacenterdynamics.com/en/analysis/hot-water-cold-water/')}`},
+  {k:'Max pump flow', v:CFG.flow_max+' L/min',
+   s:`Sizing rule is 1.2–1.5 L/min per kW to hold coolant ΔT near 10°C, with 1.5–2 L/min/kW cited
+      for AI and HPC loops. 1.5 × 120 kW = 180 L/min; this loop carries 210 for CDU headroom.
+      Vendor figures conflict (80 LPM at the cold plate vs 700+ LPM at the chassis manifold), so
+      flow here is derived from the rule of thumb and the heat balance, which agree.
+      ${lnk('CDU sizing','https://introl.com/blog/cooling-distribution-units-cdu-liquid-cooling-ai-data-center-2025')} ·
+      ${lnk('GB200 cooling requirements','https://tonecooling.com/nvidia-gb200-nvl72-cooling-requirements/')}`},
+  {k:'Baseline flow', v:CFG.baseline_flow+' L/min',
+   s:`The comparison loop: constant flow provisioned for peak, i.e. the 1.5 L/min/kW rule applied
+      to 120 kW — how fixed cooling is genuinely sized. Fair rather than identical: held there the
+      rack settles ~33°C at peak, about a degree above the default setpoint. What the comparison
+      isolates is that a fixed loop pays full flow every second whatever the load.`},
+  {k:'Min open flow', v:CFG.flow_min+' L/min', est:true,
+   s:`Stands in for real CDU pump turndown — below some fraction of rated flow a loop cannot
+      modulate meaningfully. The exact floor is product-specific.`},
+  {k:'Water c<sub>p</sub>', v:CFG.cp.toLocaleString()+' J/kg°C',
+   s:`Specific heat of liquid water at ~20°C, with density taken as 1 kg/L. Facility loops often
+      run a propylene-glycol mix with a lower c<sub>p</sub>; plain water is a simplification.`},
+  {k:'HX effectiveness', v:'ε = '+CFG.eff, est:true,
+   s:`A single lumped term standing for cold-plate and heat-exchanger approach losses, in place
+      of a plate-by-plate thermal network.`},
+
+  {sec:'Thresholds'},
+  {k:'Coolant ΔT', v:'≈10 °C target',
+   s:`B200 parts run to roughly a 10°C inlet-to-outlet budget — which is what the 1.5 L/min/kW
+      sizing rule is chosen to deliver.
+      ${lnk('GPU thermal density & flow specs','https://alliancechemical.com/blogs/articles/gpu-thermal-density-b200-gb200-coolant-flow-specs')}`},
+  {k:'Critical', v:CFG.crit+' °C',
+   s:`Return-side limit. With a 20–25°C inlet and a ~10°C rise, a healthy loop returns near
+      30–35°C; 45°C means the loop has lost the rack.`},
+  {k:'Room ambient', v:CFG.T_room+' °C',
+   s:`Mid-point of the ASHRAE A1 recommended envelope (18–27°C). Only sets the small incidental
+      loss off the chassis — a fanless rack does not cool through the room.`},
+  {k:'Ambient loss', v:CFG.k_loss+' W/°C', est:true,
+   s:`Chassis leakage only, and negligible beside a 120 kW load. Present so the model still
+      settles sensibly at zero flow.`},
+
+  {sec:'Cogeneration plant — trigeneration (CCHP)'},
+  {k:'Prime mover', v:(CHP.eta_el*100).toFixed(1)+'% elec',
+   s:`Representative 100 kW natural-gas spark-ignition genset — EPA's Catalog of CHP Technologies,
+      Table 2-2, System 1 (Tecogen Inverde Ultra 100): <b>27.0% electrical, 53.0% thermal,
+      80.0% total</b>, all HHV, recovering heat as hot water. A 100 kW unit is the honest size for
+      one 120 kW rack, and small engines are inefficient: the same table runs to 41.6% electrical
+      at 9.3 MW, where the thermal share falls to 35%. Efficiency is traded, not gained.
+      ${lnk('EPA Catalog of CHP Technologies','https://www.epa.gov/sites/default/files/2015-07/documents/catalog_of_chp_technologies.pdf')} ·
+      ${lnk('EPA CHP Partnership','https://www.epa.gov/chp/what-chp')}`},
+  {k:'Total efficiency', v:((CHP.eta_el+CHP.eta_th)*100).toFixed(0)+'%',
+   s:`27.0 + 53.0 = 80.0% (HHV) — <b>not</b> the "over 85%" that CHP marketing routinely quotes.
+      EPA's catalog puts every one of its five representative gas engines between 76.5% and 80.0%.
+      Higher figures generally count LHV rather than HHV, or credit heat that no site actually uses.
+      This model keeps the catalog's number.`},
+  {k:'Installed capacity', v:(CHP.gen_cap/1000).toFixed(0)+' kW', est:true,
+   s:`Two 100 kW units, N+1 — the redundancy a facility would actually buy. Peak facility demand
+      here is ~130 kW, so the plant islands with a unit to spare. Part-load efficiency decay is
+      not modelled; a real engine loses a few points below ~50% load.`},
+  {k:'Absorption chiller', v:'COP = '+CHP.cop_abs,
+   s:`DOE CHP Technology Fact Sheet, Table 2, System 1: single-stage water/lithium-bromide,
+      hot-water-fired at 190°F, 50 tons nominal, full-load cooling COP <b>0.70</b>. Single-stage is
+      the correct pairing — the fact sheet notes these are "often used with reciprocating engine CHP
+      installations", and lists data centres among the sites with the steady year-round cooling load
+      that suits them. The 0.70 is measured making 44°F chilled water; this loop wants 18–32°C water,
+      which is far easier, so 0.70 <b>understates</b> what the chiller would really do here.
+      ${lnk('DOE: Absorption Chillers for CHP Systems','https://www.energy.gov/sites/prod/files/2017/06/f35/CHP-Absorption%20Chiller-compliant.pdf')}`},
+  {k:'Electric chiller', v:'COP = '+CHP.cop_elec, est:true,
+   s:`The counterfactual the plant is measured against: a water-cooled centrifugal at roughly
+      0.6 kW/ton. It is deliberately a good chiller — beating a strawman would prove nothing.`},
+  {k:'Heat rejection', v:'COP = '+CHP.cop_rej, est:true,
+   s:`Dry-cooler fans and condenser-water pumps. Every watt the rack makes leaves the building
+      through these regardless of which chiller (if any) is running.`},
+  {k:'Economiser band', v:CHP.free_lo+'–'+CHP.free_hi+' °C', est:true,
+   s:`What fraction of heat rejection needs a chiller at all, interpolated linearly across the
+      ASHRAE classes the inlet slider already names: full mechanical chilling at W17, none at W32,
+      and one-third at W27 — which is what "chiller-assisted" means. Real economiser hours depend
+      on climate and wet-bulb, not on a straight line.`},
+  {k:'CDU pump', v:(CHP.pump_max/1000).toFixed(1)+' kW peak', est:true,
+   s:`At full 210 L/min flow, scaling by the affinity law (P ∝ Q³) — which is a second, quieter
+      reason to modulate: half the flow is one-eighth the pumping power.`},
+  {k:'Fuel carbon', v:CHP.co2_gas+' kg/kWh',
+   s:`Natural gas at 53.06 kg CO₂/MMBtu (HHV) ÷ 293.07 kWh/MMBtu. Combustion only — upstream
+      methane leakage is not counted here, and counting it would make the plant look worse.
+      ${lnk('EPA GHG emission factors','https://www.epa.gov/climateleadership/ghg-emission-factors-hub')}`},
+  {k:'Grid carbon', v:'373 g/kWh default',
+   s:`US national average output rate, eGRID2022: 823.1 lb CO₂/MWh = 373 g/kWh. It is a slider
+      because the answer genuinely turns on it — a coal grid and a nuclear grid give opposite
+      verdicts on the same plant.
+      ${lnk('EPA eGRID','https://www.epa.gov/egrid')}`},
+  {k:'PUE', v:'facility ÷ IT',
+   s:`Total facility electricity divided by IT electricity, per ISO/IEC 30134-2, accumulated over
+      the session rather than read instantaneously — PUE is an energy ratio, and an instantaneous
+      one would just flicker with the valve.
+      ${lnk('ISO/IEC 30134-2','https://www.iso.org/standard/63451.html')}`},
+
+  {sec:'Controller'},
+  {k:'Gain', v:'Kp = '+CFG.Kp, est:true,
+   s:`Tuning, not a measurement: ~10% of pump range per °C of error. Higher and the valve
+      saturates every cycle, degenerating into bang-bang on/off for the same water.`},
+  {k:'Deadband', v:'+'+CFG.deadband+' °C', est:true,
+   s:`Hysteresis above setpoint before the valve engages, so drift does not chatter the loop.`},
+];
+
+const SHEET_NOTE = `Figures are drawn from vendor documentation, ASHRAE TC9.9 thermal guidelines and
+  industry sizing practice. Where a number is not published it is derived from the heat balance or
+  marked as an estimate — a simulation is only as honest as the constants it will not defend.
+  Last checked July 2026.`;
+
+/* Canvas and inline SVG can't read CSS variables, so each theme's marks are
+   declared here. Every value is chosen for its own surface — the dark accents
+   are validated against #1A1813, not derived from the light ones.
+   `heat` is the sequential ramp for heat magnitude: one warm hue. On paper it
+   runs light→dark; on graphite it must run dark→bright, because "far from the
+   surface" is what reads as intensity. An inverted light ramp would read
+   backwards, with the hottest units sinking into the panel. */
+const THEMES = {
+  dark:{
+    water:'#2E93CC', warn:'#C87C1E', crit:'#D24B30',
+    ink:'#EDE7D7', ink3:'#8E8877', ink4:'#5E594B',
+    rule:'#332F26', plate:'#1A1813', hotInk:'#17150F',
+    grid:'rgba(237,231,215,.07)', axis:'rgba(237,231,215,.30)',
+    spRule:'rgba(237,231,215,.45)',
+    // Tints that read as a whisper on paper turn to fog over graphite: the
+    // warning band spans most of the plot, so at paper alphas the panel looks
+    // alarmed while the rack is nominal. Dark needs its own, much lower values.
+    bandN:'rgba(46,147,204,.045)', bandW:'rgba(200,124,30,.045)', bandC:'rgba(210,75,48,.085)',
+    flowFill:'rgba(46,147,204,.20)', manifold:'rgba(46,147,204,.18)',
+    heat:[[0,[33,30,23]],[.35,[74,44,28]],[.62,[142,59,34]],[.82,[200,69,42]],[1,[232,99,60]]],
+  },
+  light:{
+    water:'#0F79B8', warn:'#CC6A00', crit:'#BE2E0E',
+    ink:'#17160F', ink3:'#7C7869', ink4:'#A8A395',
+    rule:'#C9C3B4', plate:'#F4F1EA', hotInk:'#F6F0E8',
+    grid:'rgba(23,22,15,.07)', axis:'rgba(23,22,15,.28)',
+    spRule:'rgba(23,22,15,.5)',
+    bandN:'rgba(15,121,184,.05)', bandW:'rgba(204,106,0,.07)', bandC:'rgba(190,46,14,.09)',
+    flowFill:'rgba(15,121,184,.16)', manifold:'rgba(15,121,184,.14)',
+    heat:[[0,[246,240,232]],[.35,[236,190,166]],[.62,[214,120,80]],[.82,[190,46,14]],[1,[122,26,8]]],
+  },
+};
+let C = THEMES.dark;
+const REDUCE = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const S = {
+  T: 38, flow: 0, valve: 0, t: 0, cycles: 0,
+  water: 0, baselineWater: 0,
+  cooling: false, remaining: 0, plannedDur: 0,
+  hist: [], // {t, T, flow}
+  setpoint: 32, load: 65, inlet: 22, speed: 4,
+  // Plant. Both scenarios are integrated every tick whether the plant is on or
+  // not — the comparison is the point, so it can't be something you have to
+  // toggle back and forth to see. Energies in joules.
+  chp: false, ci: 373,
+  eIT: 0, eChp: 0, eGrid: 0, eFuel: 0, eImp: 0, eGen: 0, eHeatUse: 0,
+};
+
+const $ = id => document.getElementById(id);
+
+/* ── PHYSICS ─────────────────────────────── */
+function heatLoad(load){ return CFG.P_idle + CFG.P_max * (load/100); }
+
+function coolPower(T, flow, inlet){
+  if(flow <= 0) return 0;
+  const mdot = (flow/60);                       // L/min → kg/s (water ≈ 1 kg/L)
+  return Math.max(0, mdot * CFG.cp * (T - inlet) * CFG.eff);
+}
+
+function step(T, flow, dt, load, inlet){
+  const Pin  = heatLoad(load);
+  const Ploss= CFG.k_loss * (T - CFG.T_room);
+  const Pout = coolPower(T, flow, inlet);
+  return T + (Pin - Ploss - Pout) * dt / CFG.C;
+}
+
+/* ── PLANT ───────────────────────────────────
+   How much of the heat leaving the rack needs a chiller, rather than just a fan.
+   Above W32 the outdoor air can take it directly; below W17 it cannot at all. */
+function chillFrac(inlet){
+  return Math.max(0, Math.min(1, (CHP.free_hi - inlet)/(CHP.free_hi - CHP.free_lo)));
+}
+
+/* Both worlds, costed side by side each tick, in watts.
+
+   The trigen side is circular and people usually get it wrong by iterating: the
+   absorption chiller's capacity depends on the engine's electrical output, but if
+   the chiller falls short the electric top-up ADDS to that same electrical output,
+   which makes more heat, which raises the capacity. It's one linear equation, so
+   solve it rather than loop:  el = (base + Qchill/COPe) / (1 + A/COPe). */
+function plant(){
+  const IT   = heatLoad(S.load);
+  const pump = CHP.pump_max * Math.pow(S.flow/CFG.flow_max, 3);
+  const Qrej = coolPower(S.T, S.flow, S.inlet);   // heat actually leaving the rack
+  const rejAux = Qrej / CHP.cop_rej;              // fans and condenser pumps, always
+  const Qchill = Qrej * chillFrac(S.inlet);       // the part that needs a chiller
+  const base = IT + pump + rejAux;                // demand before any chiller work
+
+  // Grid-tied: one electric chiller carries the whole chilling duty.
+  const g_ec = Qchill / CHP.cop_elec;
+  const grid = {ec:g_ec, fac:base + g_ec, imp:base + g_ec, fuel:0, heat:0, abs:0, gen:0,
+                loss:0, heatUse:0, heatDump:0};
+
+  // Trigeneration. A = kW of cooling per kW of electricity generated. With a
+  // power/heat ratio near 0.5 the engine throws off about twice as much heat as
+  // power, so A ≈ 1.37 — one rack's worth of electricity buys rather more than
+  // one rack's worth of cooling, and the top-up chiller usually never fires.
+  const A = (CHP.eta_th/CHP.eta_el) * CHP.cop_abs;
+  const el = (A*base >= Qchill)
+    ? base                                        // absorption covers it outright
+    : (base + Qchill/CHP.cop_elec) / (1 + A/CHP.cop_elec);
+  // Only what the engines actually generate makes recoverable heat; anything past
+  // the plant's rating is bought, and brings no heat with it.
+  const gen  = Math.min(el, CHP.gen_cap);
+  const imp  = Math.max(0, el - CHP.gen_cap);
+  const fuel = gen / CHP.eta_el;
+  const heat = fuel * CHP.eta_th;
+  const abs  = Math.min(A*gen, Qchill);
+  // Derived from what the chiller actually took, not from the solved demand, so
+  // the duty still balances if the plant ever hits its rating and gets capped.
+  const ec   = (Qchill - abs) / CHP.cop_elec;
+  // Recovered heat is only worth anything if something wants it. The plant follows
+  // the ELECTRICAL load; heat it makes beyond what the chiller can use goes out the
+  // radiator. This is where the famous 80% quietly leaks away — and in a sim whose
+  // whole premise is a valve that spends most of its time shut, it leaks a lot.
+  const heatUse  = abs / CHP.cop_abs;
+  const heatDump = Math.max(0, heat - heatUse);
+  const chp  = {ec, fac:base + ec, imp, fuel, heat, heatUse, heatDump, abs, gen,
+                loss:fuel - gen - heat};
+
+  return {IT, pump, rejAux, Qrej, Qchill, free:Qrej - Qchill, grid, chp, A};
+}
+
+/* ── CONTROLLER ──────────────────────────── */
+// Feedforward + proportional. The feedforward term is the flow that exactly
+// cancels the current net heat load (holds temperature steady); the proportional
+// term adds the surplus authority that actually pulls temperature down.
+// Without feedforward the valve starves near the setpoint and never converges.
+function demandFlow(T, sp, inlet, load){
+  const err = T - (sp - CFG.target_off);
+  if(err <= 0) return 0;
+  const dT = Math.max(2, T - inlet);          // usable coolant temperature head
+  const perLitre = CFG.cp * dT * CFG.eff / 60; // W removed per L/min at this head
+  const net = heatLoad(load) - CFG.k_loss * (T - CFG.T_room);
+  const ff = Math.max(0, net) / perLitre;
+  const f  = ff + CFG.Kp * err;
+  return Math.min(CFG.flow_max, Math.max(CFG.flow_min, f));
+}
+
+// Coldest temperature physically reachable at max flow: the steady state where
+// heat in equals everything the loop plus room can carry away. With warm inlet
+// water and high load there simply isn't enough temperature head to hit the
+// requested setpoint — chasing it would pump water forever for nothing.
+function achievableFloor(load, inlet){
+  const K = (CFG.flow_max/60) * CFG.cp * CFG.eff;
+  return (heatLoad(load) + CFG.k_loss*CFG.T_room + K*inlet) / (CFG.k_loss + K);
+}
+
+// The setpoint we can actually honour.
+function effectiveSetpoint(sp, load, inlet){
+  const floor = achievableFloor(load, inlet);
+  return floor > sp - CFG.target_off ? floor + CFG.target_off + 0.2 : sp;
+}
+
+// Predict how long the loop must run to bring T down to setpoint at this flow.
+function predictDuration(T0, sp, load, inlet){
+  let T = T0, t = 0;
+  const dt = 0.5;
+  while(T > sp && t < 600){
+    const f = demandFlow(T, sp, inlet, load);
+    if(f <= 0) break;
+    const Tn = step(T, f, dt, load, inlet);
+    if(Tn >= T - 1e-5) return 600;   // cooling can't win — run indefinitely
+    T = Tn; t += dt;
+  }
+  return Math.max(4, Math.round(t));
+}
+
+/* ── DISPATCH ────────────────────────────── */
+function dispatch(T, note){
+  S.T = T;
+  const sp = effectiveSetpoint(S.setpoint, S.load, S.inlet);
+  const trigger = S.setpoint + CFG.deadband;
+
+  log(`INGEST ${T.toFixed(1)}°C${note?' · '+note:''}`, 'a');
+
+  if(sp > S.setpoint + 0.05){
+    log(`  └ setpoint ${S.setpoint.toFixed(1)}°C UNREACHABLE at ${S.load}% load / ${S.inlet.toFixed(1)}°C inlet — clamping to ${sp.toFixed(1)}°C (no thermal head; chasing it would waste water)`, 'a');
+  }
+
+  // Two different reasons the valve stays shut, and they are not interchangeable:
+  // inside the deadband the rack is fine, whereas at the thermal floor the rack
+  // is hot and the loop simply has no head left. Name whichever actually applies.
+  if(T <= Math.max(trigger, sp)){
+    S.cooling = false; S.remaining = 0; S.flow = 0; S.valve = 0;
+    if(sp > trigger)
+      log(`  └ at thermal floor (≤${sp.toFixed(1)}°C) — no head to gain; valve HELD CLOSED, 0 L dispensed`, 'a');
+    else
+      log(`  └ within deadband (≤${trigger.toFixed(1)}°C) — valve HELD CLOSED, 0 L dispensed`, 'g');
+    return;
+  }
+
+  const f   = demandFlow(T, sp, S.inlet, S.load);
+  const dur = predictDuration(T, sp, S.load, S.inlet);
+  const est = (f * dur / 60);
+
+  S.cooling = true;
+  S.remaining = dur;
+  S.plannedDur = dur;
+  S.cycles++;
+
+  const sev = T >= CFG.crit ? 'r' : 'c';
+  log(`  └ Δ=+${(T-sp).toFixed(1)}°C → valve ${Math.round(f/CFG.flow_max*100)}% · ${f.toFixed(1)} L/min for ${dur}s (≈${est.toFixed(2)} L)`, sev);
+  if(T >= CFG.crit) log(`  └ CRITICAL THRESHOLD ${CFG.crit}°C — priority cooling engaged`, 'r');
+}
+
+/* ── SIM LOOP ────────────────────────────── */
+let last = performance.now();
+function tick(now){
+  const real = Math.min(0.05, (now - last)/1000);
+  last = now;
+  const dt = real * S.speed;
+  S.t += dt;
+
+  const spEff = effectiveSetpoint(S.setpoint, S.load, S.inlet);
+
+  if(S.cooling){
+    // Re-evaluate flow every tick — adaptive, not fire-and-forget.
+    S.flow = demandFlow(S.T, spEff, S.inlet, S.load);
+    S.valve = S.flow / CFG.flow_max * 100;
+    S.remaining -= dt;
+    S.water += S.flow * dt / 60;
+
+    if(S.T <= spEff){
+      log(`  └ setpoint reached at ${S.T.toFixed(1)}°C — valve CLOSED (${(S.plannedDur-Math.max(0,S.remaining)).toFixed(0)}s runtime)`, 'g');
+      S.cooling = false; S.flow = 0; S.valve = 0;
+    } else if(S.remaining <= 0){
+      log(`  └ scheduled window elapsed at ${S.T.toFixed(1)}°C — valve CLOSED`, 'c');
+      S.cooling = false; S.flow = 0; S.valve = 0;
+    }
+  } else {
+    S.flow = 0; S.valve = 0;
+    // Autonomous guard: if drift pushes past the deadband again, re-engage.
+    if(S.T > Math.max(S.setpoint + CFG.deadband, spEff) + 0.4){
+      dispatch(S.T, 'auto re-engage (thermal drift)');
+    }
+  }
+
+  // Baseline: an always-on loop burns water every second, unconditionally.
+  S.baselineWater += CFG.baseline_flow * dt / 60;
+
+  // Energy books. Integrated before the temperature step so the flow, the heat
+  // it carried and the power that moved it all describe the same instant.
+  const P = plant();
+  S.eIT   += P.IT * dt;
+  S.eChp  += P.chp.fac * dt;
+  S.eGrid += P.grid.fac * dt;
+  S.eFuel += P.chp.fuel * dt;
+  S.eImp  += P.chp.imp * dt;
+  S.eGen  += P.chp.gen * dt;
+  S.eHeatUse += P.chp.heatUse * dt;
+
+  S.T = step(S.T, S.flow, dt, S.load, S.inlet);
+
+  S.hist.push({t:S.t, T:S.T, flow:S.flow});
+  const window = 150; // seconds of sim history shown
+  while(S.hist.length && S.hist[0].t < S.t - window) S.hist.shift();
+
+  render();
+  requestAnimationFrame(tick);
+}
+
+/* ── STATUS (color + label, never color alone) ── */
+function statusOf(T){
+  if(T >= CFG.crit) return {c:C.crit,  label:'Critical'};
+  if(T >= S.setpoint + CFG.deadband) return {c:C.warn, label:'Above band'};
+  return {c:C.water, label:'Nominal'};
+}
+
+/* Sequential ramp for heat magnitude — a single warm hue (see THEMES.heat). */
+function heatColor(u){
+  const H = C.heat;
+  u = Math.max(0, Math.min(1, u));
+  for(let i=1;i<H.length;i++){
+    if(u <= H[i][0]){
+      const [a,ca]=H[i-1], [b,cb]=H[i], k=(u-a)/(b-a);
+      return `rgb(${ca.map((v,j)=>Math.round(v+(cb[j]-v)*k)).join(',')})`;
+    }
+  }
+  return `rgb(${H[H.length-1][1].join(',')})`;
+}
+
+/* ── RENDER: TELEMETRY ───────────────────── */
+function render(){
+  const Pin  = heatLoad(S.load);
+  const Pout = coolPower(S.T, S.flow, S.inlet);
+  const dTc  = S.flow > 0 ? Pout / ((S.flow/60) * CFG.cp) : 0;
+  const st   = statusOf(S.T);
+
+  $('tTemp').textContent = S.T.toFixed(1);
+  $('sqTemp').style.background = st.c;
+  $('bTemp').style.width = Math.min(100, Math.max(0,(S.T-CFG.T_room)/(CFG.crit+10-CFG.T_room)*100))+'%';
+  $('bTemp').style.background = st.c;
+
+  $('tFlow').textContent = S.flow.toFixed(1);
+  $('bFlow').style.width = S.valve+'%';
+  $('tValve').textContent = Math.round(S.valve);
+  $('tHeat').textContent = (Pin/1000).toFixed(1);
+  $('tCool').textContent = (Pout/1000).toFixed(1);
+  $('tDelta').textContent = dTc.toFixed(1);
+  $('tWater').textContent = S.water.toFixed(2);
+
+  const saved = S.baselineWater - S.water;
+  const pct = S.baselineWater > 0 ? (saved/S.baselineWater*100) : 0;
+  $('tSaved').textContent = (saved>=0?'':'−') + Math.abs(saved).toFixed(2) + ' L';
+  $('tSavedPct').innerHTML = saved >= 0
+    ? `<b style="color:var(--ink)">${pct.toFixed(1)}% less water</b> than a constant ${CFG.baseline_flow} L/min loop sized for peak load, over the same ${fmtT(S.t)} window.`
+    : `<b style="color:var(--crit)">Pulldown deficit.</b> Recovering a thermal spike costs more than steady flow — savings accrue once the rack settles and the valve closes.`;
+
+  const el = $('status');
+  if(S.T >= CFG.crit){ el.className='status critical'; $('statusTxt').textContent='Critical · Purging'; }
+  else if(S.cooling){ el.className='status cooling'; $('statusTxt').textContent='Coolant Flowing'; }
+  else { el.className='status idle'; $('statusTxt').textContent='Idle · Valve Closed'; }
+  $('statusRt').textContent = S.cooling ? Math.max(0,S.remaining).toFixed(0)+'s remaining' : '—';
+
+  $('clock').textContent = fmtT(S.t);
+  $('cycles').textContent = String(S.cycles).padStart(3,'0');
+  $('spDisp').textContent = S.setpoint.toFixed(1)+'°C';
+
+  renderPlant();
+  drawRack();
+  drawChart();
+}
+
+/* ── RENDER: PLANT ───────────────────────── */
+const kwh = j => j/3.6e6;
+
+function renderPlant(){
+  const P = plant();
+  const a = S.chp ? P.chp : P.grid;      // the plant you are actually running
+  const kW = w => (w/1000).toFixed(1);
+
+  $('pFuel').textContent = kW(a.fuel);
+  $('pEl').textContent   = kW(a.gen);
+  $('pHeat').textContent = kW(a.heat);
+  $('pAbs').textContent  = kW(a.abs);
+  $('pEc').textContent   = kW(a.ec);
+  $('pImp').textContent  = kW(a.imp);
+
+  // Session PUE, per ISO/IEC 30134-2 — an energy ratio, not a snapshot.
+  const pue = S.eIT > 0 ? (S.chp ? S.eChp : S.eGrid)/S.eIT : 1;
+  const other = S.eIT > 0 ? (S.chp ? S.eGrid : S.eChp)/S.eIT : 1;
+  $('pPue').textContent = pue.toFixed(3);
+  $('bPue').style.width = Math.min(100, Math.max(0,(pue-1)/0.5*100))+'%';
+  $('bPue').style.background = pue < other ? C.water : C.warn;
+
+  // Total fuel efficiency, honestly: electricity plus the heat something USED.
+  // Heat out the radiator is fuel burned for nothing and is not credited.
+  const eff = S.eFuel > 0 ? (S.eGen + S.eHeatUse)/S.eFuel*100 : 0;
+  $('pEff').textContent = S.chp ? eff.toFixed(0) : '—';
+
+  $('chpBtn').setAttribute('aria-pressed', String(S.chp));
+  $('chpBtnLbl').textContent = S.chp ? 'Stop Plant' : 'Start Plant';
+
+  const el = $('chpStat');
+  if(!S.chp){
+    el.className = 'status idle';
+    $('chpStatTxt').textContent = 'Grid-Tied · Plant Offline';
+    $('chpStatRt').textContent  = kW(P.grid.imp)+' kW imported';
+  } else if(a.imp > 0){
+    el.className = 'status critical';
+    $('chpStatTxt').textContent = 'Grid-Tied · Plant At Capacity';
+    $('chpStatRt').textContent  = kW(a.imp)+' kW short';
+  } else {
+    el.className = 'status cooling';
+    $('chpStatTxt').textContent = 'Islanded · Off-Grid';
+    $('chpStatRt').textContent  = kW(a.gen)+' / '+kW(CHP.gen_cap)+' kW';
+  }
+
+  /* ── carbon ──
+     The claim worth testing. Same boundary both ways: everything the facility
+     needs, from fuel or from the meter. */
+  const ci = S.ci/1000;
+  const co2Chp  = kwh(S.eFuel)*CHP.co2_gas + kwh(S.eImp)*ci;
+  const co2Grid = kwh(S.eGrid)*ci;
+  const mine = S.chp ? co2Chp : co2Grid, theirs = S.chp ? co2Grid : co2Chp;
+  $('pCo2').textContent = mine.toFixed(2) + ' kg';
+
+  if(!S.chp){
+    $('pCo2Sub').innerHTML = S.eGrid > 0
+      ? `Grid-tied at ${S.ci} g/kWh. Running the plant instead would emit
+         <b style="color:var(--ink)">${co2Chp.toFixed(2)} kg</b> — hit <b>Start Plant</b> (or press <kbd>G</kbd>)
+         and see which way the trade actually goes.`
+      : `Plant offline — the rack and its chillers are drawing grid power.`;
+  } else if(S.eGrid > 0){
+    const d = (co2Chp - co2Grid)/co2Grid*100;
+    // The grid intensity at which the two tracks cross. This is the whole answer:
+    // dirtier than this and the plant wins, cleaner and it loses.
+    const be = (kwh(S.eGrid) - kwh(S.eImp)) > 0
+      ? kwh(S.eFuel)*CHP.co2_gas/(kwh(S.eGrid) - kwh(S.eImp))*1000 : 0;
+    $('pCo2Sub').innerHTML = d > 0
+      ? `<b style="color:var(--crit)">${d.toFixed(0)}% more CO₂</b> than grid-tied at ${S.ci} g/kWh.
+         A 27%-efficient engine emits carbon faster than it displaces it until the grid is dirtier
+         than <b style="color:var(--ink)">${be.toFixed(0)} g/kWh</b>. PUE and islanding are real;
+         on this grid, the carbon saving is not.`
+      : `<b style="color:var(--ink)">${Math.abs(d).toFixed(0)}% less CO₂</b> than grid-tied at
+         ${S.ci} g/kWh — the grid here is dirtier than the plant's break-even of
+         <b style="color:var(--ink)">${be.toFixed(0)} g/kWh</b>, so burning gas on site genuinely wins.`;
+  }
+
+  drawPlant(P);
+}
+
+function fmtT(s){
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=Math.floor(s%60);
+  return [h,m,x].map(v=>String(v).padStart(2,'0')).join(':');
+}
+
+/* ── RENDER: RACK — P&ID mimic diagram ───── */
+const UNITS = 9;
+const RY = 52, RH = 30;              // first unit y, unit pitch
+const PIPE_TOP = 34, PIPE_BOT = RY + UNITS*RH + 22;
+
+// Flow arrows: real triangles marching along the pipe, not a dashed line.
+// Under prefers-reduced-motion they still render (direction is information)
+// but hold still — the valve % and flow readout carry the rate.
+function arrows(x, y0, y1, dir, on, col){
+  if(!on) return '';
+  const span = Math.abs(y1-y0), gap = 26;
+  const phase = REDUCE ? 0 : (S.t * (18 + S.valve*0.5)) % gap;
+  let out = '';
+  for(let d = -phase; d < span; d += gap){
+    if(d < 2 || d > span-2) continue;
+    const y = dir > 0 ? y0 + d : y1 - d;
+    out += `<path d="M${x-3.4},${y+(dir>0?-3.6:3.6)} L${x+3.4},${y+(dir>0?-3.6:3.6)} L${x},${y+(dir>0?3.2:-3.2)} Z" fill="${col}"/>`;
+  }
+  return out;
+}
+
+function drawRack(){
+  // Ramp spans room ambient → critical: the rack reads cold at the temperature
+  // it would sit at unpowered, and fully hot exactly where the loop has lost it.
+  const heat = Math.max(0, Math.min(1, (S.T - CFG.T_room) / (CFG.crit - CFG.T_room)));
+  const on = S.flow > 0;
+  const retT = on ? (S.inlet + coolPower(S.T,S.flow,S.inlet)/((S.flow/60)*CFG.cp)) : null;
+
+  let u = '';
+  for(let i=0;i<UNITS;i++){
+    const y = RY + i*RH;
+    // Lower units run hotter — heat rises through the rack.
+    const local = Math.min(1, heat * (0.72 + (UNITS-i)/UNITS * 0.5));
+    const fill = heatColor(local);
+    const dark = local > 0.6;
+    u += `
+      <rect x="30" y="${y}" width="150" height="24" fill="${fill}" stroke="${C.ink}" stroke-width=".8"/>
+      <rect x="35" y="${y+5}" width="46" height="14" fill="none" stroke="${C.ink}" stroke-width=".5" opacity=".5"/>
+      ${[0,1,2,3,4,5].map(j=>`<rect x="${38+j*7}" y="${y+8}" width="2.5" height="8" fill="${C.ink}" opacity="${(0.18+local*0.5).toFixed(2)}"/>`).join('')}
+      <g transform="translate(103 ${y+12})">
+        <circle r="7.5" fill="none" stroke="${C.ink}" stroke-width=".6" opacity=".55"/>
+        <g style="${REDUCE?'':`animation:spin ${(1.5 - local*1.15).toFixed(2)}s linear infinite;`}transform-origin:0 0">
+          <path d="M0,-6 L1.7,-1.4 L6,0 L1.7,1.4 L0,6 L-1.7,1.4 L-6,0 L-1.7,-1.4 Z"
+                fill="none" stroke="${dark?C.hotInk:C.ink}" stroke-width=".9" opacity=".8"/>
+        </g>
+      </g>
+      <rect x="122" y="${y+8}" width="52" height="8" fill="none" stroke="${C.ink}" stroke-width=".5" opacity=".45"/>
+      <rect x="122" y="${y+8}" width="${(52*local).toFixed(1)}" height="8" fill="${C.ink}" opacity=".5"/>
+      <text x="24" y="${y+16}" text-anchor="end" font-family="Martian Mono" font-size="5"
+            fill="${C.ink4}">U${String(UNITS-i).padStart(2,'0')}</text>
+    `;
+  }
+
+  $('rackSvg').innerHTML = `
+    <defs><style>@keyframes spin{to{transform:rotate(360deg)}}</style></defs>
+
+    <!-- ── supply riser (cold, left) ── -->
+    <path d="M12,${PIPE_BOT} L12,${PIPE_TOP} L30,${PIPE_TOP}" fill="none"
+          stroke="${on?C.water:C.ink4}" stroke-width="1.6" opacity="${on?1:.5}"/>
+    ${arrows(12, PIPE_TOP+8, PIPE_BOT-8, -1, on, C.water)}
+
+    <!-- ── return riser (hot, right) ── -->
+    <path d="M180,${PIPE_TOP} L198,${PIPE_TOP} L198,${PIPE_BOT}" fill="none"
+          stroke="${on?C.crit:C.ink4}" stroke-width="1.6" opacity="${on?1:.5}"/>
+    ${arrows(198, PIPE_TOP+8, PIPE_BOT-8, 1, on, C.crit)}
+
+    <!-- ── manifold ── -->
+    <rect x="30" y="${PIPE_TOP-4}" width="150" height="8" fill="${on?C.manifold:'none'}"
+          stroke="${C.ink}" stroke-width=".8"/>
+    <text x="105" y="${PIPE_TOP-8}" text-anchor="middle" font-family="Martian Mono" font-size="5"
+          fill="${C.ink3}" letter-spacing=".1em">DISTRIBUTION MANIFOLD</text>
+
+    <!-- ── rack chassis outline ── -->
+    <rect x="30" y="${RY-6}" width="150" height="${UNITS*RH+12}" fill="none"
+          stroke="${C.ink}" stroke-width="1.2"/>
+    ${u}
+
+    <!-- ── ISO gate-valve symbol (bowtie) ── -->
+    <g transform="translate(12 ${PIPE_BOT})">
+      <path d="M-9,-7 L0,0 L-9,7 Z M9,-7 L0,0 L9,7 Z" fill="${on?C.water:'none'}"
+            stroke="${on?C.water:C.ink}" stroke-width="1"/>
+      <line x1="0" y1="0" x2="0" y2="-11" stroke="${C.ink}" stroke-width="1"/>
+      <line x1="-5" y1="-11" x2="5" y2="-11" stroke="${C.ink}" stroke-width="1"/>
+      <text y="20" text-anchor="middle" font-family="Martian Mono" font-size="5" fill="${C.ink3}">FCV-01</text>
+      <text y="29" text-anchor="middle" font-family="Martian Mono" font-size="7" font-weight="500"
+            fill="${C.ink}">${Math.round(S.valve)}%</text>
+    </g>
+
+    <!-- ── pump symbol on return ── -->
+    <g transform="translate(198 ${PIPE_BOT})">
+      <circle r="7" fill="none" stroke="${C.ink}" stroke-width="1"/>
+      <path d="M-7,0 L4,0 M0,-4 L4,0 L0,4" fill="none" stroke="${C.ink}" stroke-width=".9"/>
+      <text y="20" text-anchor="middle" font-family="Martian Mono" font-size="5" fill="${C.ink3}">P-01</text>
+    </g>
+
+    <!-- ── temperature indicators (ISO circle tags) ── -->
+    <g transform="translate(12 ${PIPE_TOP-16})">
+      <circle r="8.5" fill="${C.plate}" stroke="${C.ink}" stroke-width=".8"/>
+      <line x1="-8.5" y1="0" x2="8.5" y2="0" stroke="${C.ink}" stroke-width=".5"/>
+      <text y="-2" text-anchor="middle" font-family="Martian Mono" font-size="4.5" fill="${C.ink3}">TI</text>
+      <text y="6" text-anchor="middle" font-family="Martian Mono" font-size="5" font-weight="500"
+            fill="${C.water}">${S.inlet.toFixed(0)}°</text>
+    </g>
+    <g transform="translate(198 ${PIPE_TOP-16})">
+      <circle r="8.5" fill="${C.plate}" stroke="${C.ink}" stroke-width=".8"/>
+      <line x1="-8.5" y1="0" x2="8.5" y2="0" stroke="${C.ink}" stroke-width=".5"/>
+      <text y="-2" text-anchor="middle" font-family="Martian Mono" font-size="4.5" fill="${C.ink3}">TI</text>
+      <text y="6" text-anchor="middle" font-family="Martian Mono" font-size="5" font-weight="500"
+            fill="${retT!==null?C.crit:C.ink4}">${retT!==null?retT.toFixed(0)+'°':'—'}</text>
+    </g>
+
+    <text x="12" y="14" font-family="Martian Mono" font-size="5" fill="${C.ink3}">SUPPLY</text>
+    <text x="198" y="14" text-anchor="end" font-family="Martian Mono" font-size="5" fill="${C.ink3}">RETURN</text>
+    <text x="105" y="${PIPE_BOT+34}" text-anchor="middle" font-family="Instrument Serif" font-size="11"
+          fill="${C.ink}">Rack A-07</text>
+  `;
+}
+
+/* ── RENDER: PLANT — CCHP flow diagram ───────
+   Band thickness is fuel energy, and only fuel energy. The engine's split into
+   electricity, useful heat, dumped heat and stack loss is one quantity being
+   conserved, so it can honestly be drawn to scale on a shared px-per-watt rule.
+   Cooling is NOT that quantity — it is heat moved, not fuel spent. So cooling
+   leaves the chiller as a pipe with a number on it, never as a band: drawing
+   57 kW of cooling the same width as 57 kW of fuel is a lie the diagram would
+   tell for free, and it is exactly the lie that makes COP > 1 look like
+   perpetual motion. The duty split gets its own bar underneath, where the
+   quantity being divided is heat and every segment is the same kind of thing.
+   ─────────────────────────────────────────── */
+const FS = 90/480000;    // px per watt — one scale, every band, both modes
+
+function drawPlant(P){
+  const a  = S.chp ? P.chp : P.grid;
+  const kW = w => (w/1000).toFixed(0);
+  const bw = w => Math.max(1.2, w*FS);
+
+  // Lane centres, spaced so the widest each band can ever get still leaves its
+  // label room above it. A band that swallows its own caption is worse than a
+  // smaller band, so the scale is set by the labels, not the other way round.
+  const EL=68, TH=132, DUMP=200, LS=252;
+  const cap = (y,w) => y - bw(w)/2 - 5;       // caption sits on the band's edge
+  const t = (x,y,s,col,size=5.5,anc='start',wt=400) =>
+    `<text x="${x}" y="${y}" text-anchor="${anc}" font-family="Martian Mono" font-size="${size}"
+      font-weight="${wt}" fill="${col}" letter-spacing=".06em">${s}</text>`;
+
+  const band = (x0,x1,y,w,col,op=1) => {
+    const h = bw(w);
+    return `<rect x="${x0}" y="${(y-h/2).toFixed(1)}" width="${x1-x0}" height="${h.toFixed(1)}"
+             fill="${col}" opacity="${op}"/>`;
+  };
+  // Direction is information, so the chevrons render under reduced motion too —
+  // they simply stop marching. Only worth drawing where the band can hold them.
+  const chev = (x0,x1,y,w,col) => {
+    if(bw(w) < 8) return '';
+    const gap = 32, span = x1-x0, ph = REDUCE ? 0 : (S.t*20)%gap;
+    let o = '';
+    for(let d=-ph; d<span; d+=gap){
+      if(d<8 || d>span-8) continue;
+      const x = x0+d;
+      o += `<path d="M${x-2.6},${y-3} L${x+2.6},${y} L${x-2.6},${y+3} Z" fill="${C.plate}" opacity=".5"/>`;
+    }
+    return o;
+  };
+  const block = (x,y,w,h,name,sub,live) => `
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${live?C.plate:'none'}"
+          stroke="${live?C.ink:C.ink4}" stroke-width="1.1" ${live?'':'stroke-dasharray="3 3"'}/>
+    ${t(x+w/2, y+h/2-2, name, live?C.ink:C.ink4, 6, 'middle', 500)}
+    ${t(x+w/2, y+h/2+9, sub, C.ink3, 5, 'middle')}`;
+
+  /* ── the fuel chain — drawn only when the plant is running ── */
+  let chain = '';
+  if(S.chp){
+    chain = `
+      ${band(14,130,160,a.fuel,C.ink3,.55)}
+      ${t(14,cap(160,a.fuel),`NATURAL GAS · ${kW(a.fuel)} kW HHV`,C.ink3)}
+      ${block(130,40,84,240,'G','CHP-01 · 2×100 kW',true)}
+      ${band(214,666,EL,a.gen,C.water)}${chev(214,666,EL,a.gen,C.water)}
+      ${band(214,430,TH,a.heatUse,C.warn)}${chev(214,430,TH,a.heatUse,C.warn)}
+      ${band(214,380,DUMP,a.heatDump,C.warn,.28)}
+      ${band(214,380,LS,a.loss,C.ink4,.5)}
+      ${t(218,cap(EL,a.gen),`ELECTRICITY · ${kW(a.gen)} kW`,C.water)}
+      ${t(218,cap(TH,a.heatUse),`HEAT TO CHILLER · ${kW(a.heatUse)} kW`,C.warn)}
+      ${t(218,cap(DUMP,a.heatDump),`HEAT DUMPED · ${kW(a.heatDump)} kW`,C.ink3)}
+      ${t(218,cap(LS,a.loss),`STACK & JACKET LOSS · ${kW(a.loss)} kW`,C.ink4)}
+      ${block(380,168,90,112,'RADIATOR','& STACK',true)}`;
+  } else {
+    // Grid-tied: the plant stands there switched off, and the electricity simply
+    // appears from the meter. Showing the dead engine is the point of the compare.
+    chain = `
+      ${block(130,40,84,240,'G','CHP-01 · OFFLINE',false)}
+      <g transform="translate(238 ${EL})">
+        <circle r="11" fill="${C.plate}" stroke="${C.ink}" stroke-width=".8"/>
+        <line x1="-11" y1="0" x2="11" y2="0" stroke="${C.ink}" stroke-width=".5"/>
+        ${t(0,-2.5,'EM',C.ink3,4.5,'middle')}${t(0,7,'01',C.ink,5,'middle',500)}
+      </g>
+      ${band(249,666,EL,a.fac,C.water)}${chev(249,666,EL,a.fac,C.water)}
+      ${t(253,cap(EL,a.fac),`GRID IMPORT · ${kW(a.fac)} kW`,C.water)}
+      ${block(380,168,90,112,'RADIATOR','& STACK',false)}`;
+  }
+
+  /* ── the chiller: same slot, different machine ── */
+  const live = P.Qchill > 1;
+  const chiller = S.chp
+    ? block(430,102,100,60,'ABSORPTION',`COP ${CHP.cop_abs} · ${kW(a.abs)} kW`,live)
+    : block(430,102,100,60,'ELECTRIC CHILLER',`COP ${CHP.cop_elec} · ${kW(P.Qchill)} kW`,live);
+
+  // Electric spur into the chiller — the top-up in trigen mode, the whole story
+  // in grid mode. A vertical band on the same scale as every other band.
+  const spur = a.ec > 1
+    ? `<rect x="${(480-bw(a.ec)/2).toFixed(1)}" y="${EL}" width="${bw(a.ec).toFixed(1)}"
+             height="${102-EL}" fill="${C.water}"/>
+       ${t(536,94,`${kW(a.ec)} kW ELEC`,C.water,5)}` : '';
+
+  const pipeOn = P.Qrej > 1;
+  const arrowsH = (x0,x1,y,col) => {
+    if(!pipeOn) return '';
+    const gap = 26, span = x1-x0, ph = REDUCE ? 0 : (S.t*18)%gap;
+    let o = '';
+    for(let d=-ph; d<span; d+=gap){
+      if(d<4 || d>span-4) continue;
+      const x = x0+d;
+      o += `<path d="M${x-3.4},${y-3.4} L${x+3.4},${y} L${x-3.4},${y+3.4} Z" fill="${col}"/>`;
+    }
+    return o;
+  };
+
+  $('chpSvg').innerHTML = `
+    ${chain}
+    ${chiller}
+    ${spur}
+
+    <!-- chilled water: a pipe, not a band — heat moved is not fuel spent -->
+    <path d="M530,${TH} L666,${TH}" fill="none" stroke="${pipeOn?C.water:C.ink4}"
+          stroke-width="1.6" opacity="${pipeOn?1:.5}"/>
+    ${arrowsH(536,660,TH,C.water)}
+    ${t(536,TH-9,`CHILLED WATER · ${kW(P.Qchill)} kW @ ${S.inlet.toFixed(0)}°C`,C.ink3,5)}
+
+    <!-- terminals -->
+    ${block(666,46,190,44,'RACK A-07',`IT + PUMPS · ${kW(P.IT+P.pump)} kW`,true)}
+    ${block(666,110,190,44,'COOLANT LOOP',`REJECTING · ${kW(P.Qrej)} kW`,pipeOn)}
+
+    <!-- ── duty ledger ──
+         One quantity — the heat leaving the rack — split by who carries it. -->
+    ${t(14,296,'HEAT REJECTION DUTY — WHO CARRIES IT',C.ink3,7,'start',500)}
+    ${t(856,296,`${kW(P.Qrej)} kW`,C.ink,7,'end',500)}
+    ${dutyBar(P)}
+  `;
+}
+
+/* The duty split. Free cooling, absorption and electric are three ways of moving
+   the same watt, so they stack — and each is labelled, because a colour alone has
+   never told anyone which machine is paying the bill. */
+function dutyBar(P){
+  const X0 = 14, W = 842, Y = 304, H = 26;
+  const t = (x,y,s,col,size=5.5,anc='start',wt=400) =>
+    `<text x="${x}" y="${y}" text-anchor="${anc}" font-family="Martian Mono" font-size="${size}"
+      font-weight="${wt}" fill="${col}" letter-spacing=".06em">${s}</text>`;
+
+  if(P.Qrej <= 1){
+    return `<rect x="${X0}" y="${Y}" width="${W}" height="${H}" fill="none" stroke="${C.ink4}"
+              stroke-width="1" stroke-dasharray="3 3"/>
+            ${t(X0+W/2, Y+H/2+2,'VALVE CLOSED — NO HEAT LEAVING THE RACK',C.ink4,6,'middle')}`;
+  }
+
+  const abs  = S.chp ? P.chp.abs : 0;
+  const elec = Math.max(0, P.Qchill - abs);
+  const segs = [
+    {w:P.free, c:C.water, op:.35, k:'FREE COOLING', n:'dry coolers · no chiller'},
+    {w:abs,    c:C.warn,  op:1,   k:'ABSORPTION',   n:'driven by engine waste heat'},
+    {w:elec,   c:C.ink3,  op:1,   k:'ELECTRIC CHILLER', n:'grid work at COP '+CHP.cop_elec},
+  ];
+
+  let x = X0, bar = '';
+  segs.forEach(s => {
+    const w = s.w/P.Qrej*W;
+    if(w > 0.5) bar += `<rect x="${x.toFixed(1)}" y="${Y}" width="${w.toFixed(1)}" height="${H}"
+                          fill="${s.c}" opacity="${s.op}"/>`;
+    x += w;
+  });
+  bar += `<rect x="${X0}" y="${Y}" width="${W}" height="${H}" fill="none" stroke="${C.ink}"
+            stroke-width=".8"/>`;
+
+  // Legend at fixed stops: the segments move, the reading position shouldn't.
+  segs.forEach((s,i) => {
+    const lx = X0 + i*281;
+    bar += `<rect x="${lx}" y="${Y+H+10}" width="7" height="7" fill="${s.c}" opacity="${s.op}"/>
+            ${t(lx+12, Y+H+16.5, `${s.k} · ${(s.w/1000).toFixed(0)} kW`, C.ink, 6, 'start', 500)}
+            ${t(lx+12, Y+H+26, s.n, C.ink4, 5)}`;
+  });
+  return bar;
+}
+
+/* ── RENDER: CHART ───────────────────────────
+   Two stacked panels on ONE shared time axis. Temperature and flow are
+   different measures, so they never share a y-scale — a dual-axis chart
+   invites false correlation. Temperature is a single ink line read against
+   labeled zone bands; flow is a single blue series.
+   ─────────────────────────────────────────── */
+function drawChart(){
+  const cv = $('chart'), ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if(cv.width !== Math.round(W*dpr)){ cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const L = 40, R = 12, gap = 34;
+  const topT = 18, hT = Math.round((H-topT-gap-26)*0.66);
+  const topF = topT + hT + gap, hF = (H-26) - topF;
+  const gw = W - L - R;
+
+  const win = 150;
+  // Scale spans the operating range, not the injectable range. Pushing Tmax to
+  // the spike ceiling would hand ~half the panel to the critical band and leave
+  // it looking alarmed while the rack is nominal; excursions clip and the head
+  // marker clamps into view instead.
+  const Tmin = 18, Tmax = 60;
+  const x  = t => L + (1 - (S.t - t)/win) * gw;
+  const y  = T => topT + hT - (T-Tmin)/(Tmax-Tmin)*hT;
+  const yF = f => topF + hF - (f/CFG.flow_max)*hF;
+
+  ctx.textBaseline = 'middle';
+  const label = (s,px,py,col,size=8,align='left',weight=400)=>{
+    ctx.font = `${weight} ${size}px "Martian Mono", monospace`;
+    ctx.fillStyle = col; ctx.textAlign = align; ctx.fillText(s,px,py);
+  };
+
+  /* ── zone bands (magnitude read against labeled regions) ── */
+  const band = (t0,t1,fill)=>{
+    const a = Math.max(topT, y(t1)), b = Math.min(topT+hT, y(t0));
+    if(b>a) { ctx.fillStyle=fill; ctx.fillRect(L, a, gw, b-a); }
+  };
+  band(Tmin, S.setpoint+CFG.deadband, C.bandN);
+  band(S.setpoint+CFG.deadband, CFG.crit, C.bandW);
+  band(CFG.crit, Tmax, C.bandC);
+
+  /* ── grid: recessive hairlines ── */
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+  for(let T=20;T<=Tmax;T+=10){
+    ctx.beginPath(); ctx.moveTo(L,y(T)+.5); ctx.lineTo(L+gw,y(T)+.5); ctx.stroke();
+    label(T+'°', L-8, y(T), C.ink4, 7.5, 'right');
+  }
+  // Flow ticks follow the pump range rather than a fixed set, so retuning
+  // flow_max can't silently leave the axis labelled for the old loop.
+  for(let i=0;i<=3;i++){
+    const f = CFG.flow_max*i/3;
+    ctx.beginPath(); ctx.moveTo(L,yF(f)+.5); ctx.lineTo(L+gw,yF(f)+.5); ctx.stroke();
+    label(String(Math.round(f)), L-8, yF(f), C.ink4, 7.5, 'right');
+  }
+
+  /* ── shared time axis ── */
+  ctx.strokeStyle = C.axis;
+  ctx.beginPath(); ctx.moveTo(L, topF+hF+.5); ctx.lineTo(L+gw, topF+hF+.5); ctx.stroke();
+  for(let i=0;i<=5;i++){
+    const px = Math.round(L + gw*i/5)+.5;
+    ctx.strokeStyle=C.axis;
+    ctx.beginPath(); ctx.moveTo(px, topF+hF); ctx.lineTo(px, topF+hF+4); ctx.stroke();
+    label(i===5?'now':'−'+Math.round(win*(1-i/5))+'s', px, topF+hF+14, C.ink4, 7.5, 'center');
+  }
+
+  /* ── panel titles (name the single series; no legend box needed) ── */
+  label('RACK TEMPERATURE', L, topT-8, C.ink3, 8, 'left', 500);
+  label('°C', L+gw, topT-8, C.ink4, 7.5, 'right');
+  label('COOLANT FLOW', L, topF-9, C.ink3, 8, 'left', 500);
+  label('L/MIN', L+gw, topF-9, C.ink4, 7.5, 'right');
+
+  /* ── reference rules, directly labeled ── */
+  ctx.setLineDash([3,3]);
+  ctx.strokeStyle = C.spRule; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(L,y(S.setpoint)+.5); ctx.lineTo(L+gw,y(S.setpoint)+.5); ctx.stroke();
+  ctx.strokeStyle = C.crit; ctx.globalAlpha=.5;
+  ctx.beginPath(); ctx.moveTo(L,y(CFG.crit)+.5); ctx.lineTo(L+gw,y(CFG.crit)+.5); ctx.stroke();
+  ctx.globalAlpha=1; ctx.setLineDash([]);
+  label(`SETPOINT ${S.setpoint.toFixed(1)}°`, L+5, y(S.setpoint)-7, C.ink3, 7);
+  label(`CRITICAL ${CFG.crit}°`, L+5, y(CFG.crit)-7, C.crit, 7);
+  ctx.strokeStyle = C.axis;
+  ctx.beginPath(); ctx.moveTo(L+.5,topT); ctx.lineTo(L+.5,topT+hT); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(L+.5,topF); ctx.lineTo(L+.5,topF+hF); ctx.stroke();
+
+  if(S.hist.length < 2) return;
+
+  /* ── flow series ── */
+  ctx.save(); ctx.beginPath(); ctx.rect(L,topF,gw,hF); ctx.clip();
+  ctx.beginPath();
+  ctx.moveTo(x(S.hist[0].t), topF+hF);
+  S.hist.forEach(p => ctx.lineTo(x(p.t), yF(p.flow)));
+  ctx.lineTo(x(S.hist[S.hist.length-1].t), topF+hF);
+  ctx.closePath();
+  ctx.fillStyle = C.flowFill; ctx.fill();
+  ctx.beginPath();
+  S.hist.forEach((p,i)=> i?ctx.lineTo(x(p.t),yF(p.flow)):ctx.moveTo(x(p.t),yF(p.flow)));
+  ctx.strokeStyle = C.water; ctx.lineWidth = 2; ctx.lineJoin='round'; ctx.stroke();
+  ctx.restore();
+
+  /* ── temperature series: one ink line, 2px ── */
+  ctx.save(); ctx.beginPath(); ctx.rect(L,topT,gw,hT); ctx.clip();
+  ctx.beginPath();
+  S.hist.forEach((p,i)=> i?ctx.lineTo(x(p.t),y(p.T)):ctx.moveTo(x(p.t),y(p.T)));
+  ctx.strokeStyle = C.ink; ctx.lineWidth = 2; ctx.lineJoin='round'; ctx.lineCap='round'; ctx.stroke();
+  ctx.restore();
+
+  /* ── head markers: 8px, 2px surface ring ── */
+  const p = S.hist[S.hist.length-1], st = statusOf(p.T);
+  // Keep the head marker and its label inside the panel even when the series
+  // pins to the top of its scale (flow at max, temperature off-chart).
+  const clamp = (v,lo,hi) => Math.max(lo, Math.min(hi, v));
+  const yTc = clamp(y(p.T),  topT+7, topT+hT-7);
+  const yFc = clamp(yF(p.flow), topF+7, topF+hF-7);
+  const mark = (px,py,fill)=>{
+    ctx.beginPath(); ctx.arc(px,py,4,0,7); ctx.fillStyle=fill; ctx.fill();
+    ctx.lineWidth=2; ctx.strokeStyle=C.plate; ctx.stroke();
+  };
+  mark(x(p.t), yTc, st.c);
+  if(p.flow>0) mark(x(p.t), yFc, C.water);
+
+  /* ── direct labels (text in ink; the mark carries identity) ── */
+  const tag = (s,px,py,col)=>{
+    ctx.font='500 9px "Martian Mono", monospace';
+    const w = ctx.measureText(s).width + 8;
+    let bx = px - w - 8; if(bx < L+2) bx = px + 8;
+    ctx.fillStyle=C.plate; ctx.fillRect(bx, py-7, w, 14);
+    ctx.strokeStyle=col; ctx.lineWidth=1; ctx.strokeRect(bx+.5, py-6.5, w-1, 13);
+    label(s, bx+4, py, C.ink, 9, 'left', 500);
+  };
+  tag(p.T.toFixed(1)+'°C', x(p.t), yTc, st.c);
+  if(p.flow>0) tag(p.flow.toFixed(1)+' L/min', x(p.t), yFc, C.water);
+}
+
+/* ── LOG ─────────────────────────────────── */
+function log(msg, cls=''){
+  const el = document.createElement('div');
+  el.innerHTML = `<span class="t">${fmtT(S.t)}</span><span class="${cls}">${msg}</span>`;
+  const L = $('log');
+  L.appendChild(el);
+  while(L.children.length > 90) L.removeChild(L.firstChild);
+  L.scrollTop = L.scrollHeight;
+}
+
+/* ── UI WIRING ───────────────────────────── */
+$('send').onclick = () => {
+  const v = parseFloat($('tempIn').value);
+  if(isNaN(v)) return;
+  dispatch(Math.max(15, Math.min(95, v)), 'manual injection');
+};
+$('rand').onclick = () => {
+  // Span the plausible operating range for this rack: from a well-cooled loop
+  // just under setpoint up to a rack in trouble.
+  const v = Math.round((28 + Math.random()*24) * 2) / 2;
+  $('tempIn').value = v;
+  dispatch(v, 'random probe');
+};
+$('spike').onclick = () => {
+  // Always lands past the 45°C critical threshold, and stays on-scale.
+  const v = Math.round((46 + Math.random()*14) * 2) / 2;
+  $('tempIn').value = v;
+  dispatch(v, 'thermal spike event');
+};
+$('reset').onclick = () => {
+  Object.assign(S, {T:S.setpoint, flow:0, valve:0, t:0, cycles:0, water:0,
+                    baselineWater:0, cooling:false, remaining:0, hist:[],
+                    eIT:0, eChp:0, eGrid:0, eFuel:0, eImp:0, eGen:0, eHeatUse:0});
+  $('log').innerHTML = '';
+  log('SYSTEM RESET — controller armed, valve closed', 'g');
+};
+
+/* The plant switch. Energy books are NOT reset with it — both scenarios have been
+   accruing since t=0 regardless, so flipping it mid-run changes which plant you
+   are running, not the history you are comparing against. */
+$('chpBtn').onclick = () => $('chp').click();
+$('chp').onclick = () => {
+  S.chp = !S.chp;
+  $('chp').setAttribute('aria-pressed', String(S.chp));
+  $('chpLbl').textContent = S.chp ? 'Plant Online · Islanded' : 'Plant Offline · Grid-Tied';
+  if(S.chp){
+    log('CCHP-01 ONLINE — genset synchronised, absorption chiller charging', 'c');
+    log(`  └ island mode · ${(CHP.gen_cap/1000).toFixed(0)} kW installed · heat recovery to LiBr chiller (COP ${CHP.cop_abs})`, 'g');
+  } else {
+    log('CCHP-01 OFFLINE — plant stopped, facility back on grid supply', 'a');
+  }
+  render();
+};
+
+const bind = (id, key, fmt, disp) => {
+  $(id).oninput = e => { S[key] = parseFloat(e.target.value); $(disp).textContent = fmt(S[key]); };
+};
+bind('sp','setpoint', v=>v.toFixed(1)+' °C','spV');
+bind('load','load',   v=>v+' %','loadV');
+bind('inlet','inlet', v=>v.toFixed(1)+' °C','inletV');
+bind('spd','speed',   v=>v+'×','spdV');
+bind('ci','ci',       v=>v+' g/kWh','ciV');
+
+/* Name the grid the number implies, the way the inlet slider names its ASHRAE
+   class — 373 g/kWh is not a fact about the world, it's a choice of country. */
+const GRIDS = [
+  [60,'≈ nuclear / hydro · Sweden, France'],
+  [200,'≈ low-carbon mix · UK, Ontario'],
+  [340,'≈ gas-led mix · Spain, Texas'],
+  [420,'US average · eGRID 2022'],
+  [700,'≈ coal-heavy · India, Poland'],
+];
+const gridNote = ci => (GRIDS.find(([m]) => ci <= m) || [0,'≈ coal · unabated'])[1];
+const ciEl = $('ci'), prevCi = ciEl.oninput;
+ciEl.oninput = e => { prevCi(e); $('ciNote').textContent = gridNote(S.ci); };
+$('ciNote').textContent = gridNote(S.ci);
+
+/* ASHRAE liquid-cooling classes name the MAXIMUM supply temp, so a given water
+   temperature sits in the lowest class whose ceiling it clears. Naming the class
+   is the point: it says what plant the number implies. */
+const ASHRAE = [
+  [17,'W17 · chilled, with economiser'],
+  [27,'W27 · chiller-assisted'],
+  [32,'W32 · typically chiller-free'],
+  [40,'W40 · chiller-free'],
+  [45,'W45 · chiller-free, dry cooler'],
+];
+function ashraeClass(t){
+  const c = ASHRAE.find(([max]) => t <= max);
+  return c ? c[1] : 'W+ · above 45 °C';
+}
+const inletEl = $('inlet'), prevInlet = inletEl.oninput;
+inletEl.oninput = e => { prevInlet(e); $('ashrae').textContent = ashraeClass(S.inlet); };
+$('ashrae').textContent = ashraeClass(S.inlet);
+
+/* Panel finish. Dark is the default; light is the same instrument in daylight.
+   Each theme's marks come from THEMES, so nothing is inverted at runtime. */
+let theme = 'dark';
+$('theme').onclick = () => {
+  theme = theme === 'dark' ? 'light' : 'dark';
+  C = THEMES[theme];
+  document.documentElement.dataset.theme = theme;
+  $('theme').setAttribute('aria-label', `Switch to ${theme === 'dark' ? 'light' : 'dark'} panel`);
+  render();
+};
+
+/* ── INFO SHEET ──────────────────────────── */
+$('sheetBody').innerHTML =
+  `<div class="sheet-intro">${SHEET_NOTE}</div>` +
+  SOURCES.map(r => r.sec
+    ? `<div class="sheet-sec">${r.sec}</div>`
+    : `<div class="srow"><div class="sk">${r.k}</div><div class="sv">${r.v}</div>
+         <div class="ss">${r.est?'<span class="est">Estimate</span>':''}${r.s}</div></div>`
+  ).join('') +
+  `<div class="sheet-foot">This is a teaching simulation, not a design tool. It models one lumped
+   rack temperature — real deployments care about per-GPU junction temperatures, pressure drop,
+   coolant chemistry and CDU redundancy, none of which appear here.<br><br>
+   The plant is simplified in ways that all flatter it: no engine part-load efficiency decay, no
+   absorption-chiller condenser heat, no rated chiller capacity ceiling (transient pulldown duty can
+   briefly exceed any real machine), no start-up or minimum-run constraints, no upstream methane
+   leakage, and no credit for the transmission losses on-site generation avoids. It is also
+   modelled as serving a single rack, which forces a 100 kW-class engine and its 27% electrical
+   efficiency; a hall-scale plant would use a larger, more efficient machine. Note too that PUE
+   counts electricity at the point of use, so on-site generation makes cooling look free while the
+   fuel burned to make it never appears in the ratio — which is precisely why PUE improves here
+   even in the cases where emissions get worse.</div>`;
+
+$('info').onclick = () => $('sheet').showModal();
+$('sheetClose').onclick = () => $('sheet').close();
+// Click the backdrop to dismiss: the dialog itself is the only child that can be
+// the target inside its own box, so a hit on <dialog> means a hit outside it.
+$('sheet').onclick = e => { if(e.target.id === 'sheet') $('sheet').close(); };
+
+document.onkeydown = e => {
+  // The sheet owns the keyboard while it's up — Esc closes it (dialog does that
+  // natively) and the sim's letter shortcuts must not fire behind it.
+  if($('sheet').open) return;
+  if(e.target.tagName === 'INPUT' && e.key !== 'Enter') return;
+  if(e.key === 'Enter') $('send').click();
+  if(e.key.toLowerCase() === 'r') $('rand').click();
+  if(e.key.toLowerCase() === 's') $('spike').click();
+  if(e.key.toLowerCase() === 'g') $('chp').click();
+  // 'chpBtn' in the plant panel mirrors the same toggle — see wiring below.
+  if(e.key.toLowerCase() === 'i') $('info').click();
+  if(e.key === 'Escape') $('reset').click();
+};
+
+/* ── BOOT ────────────────────────────────── */
+log('THERMOSYNC v1.1 — controller online', 'c');
+log(`  └ rack A-07 · C=${(CFG.C/1000).toFixed(0)} kJ/°C · pump ${CFG.flow_min}–${CFG.flow_max} L/min · ε=${CFG.eff}`, '');
+log(`  └ CCHP-01 standby · grid-tied · hit Start Plant (or press G)`, 'g');
+dispatch(38, 'initial state');
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
